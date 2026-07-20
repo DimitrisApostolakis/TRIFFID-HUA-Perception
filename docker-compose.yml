@@ -20,7 +20,7 @@ services:
       - ./build:/ws/build                      # persist build artifacts
       - ./log:/ws/log                          # persist logs
       - ./cyclonedds.xml:/ws/cyclonedds.xml:ro # DDS config
-      - ./best.pt:/ws/best.pt:ro               # YOLO model weights
+      - ./best.pt:/ws/best.pt:ro               # model weights
       - ./samples:/ws/samples                  # periodic GeoJSON snapshots
 
     network_mode: host    # shares host network so ROS2 DDS works seamlessly

@@ -1,6 +1,6 @@
 """
 ByteTrack-style Tracker for TRIFFID Perception
-================================================
+
 Multi-object tracker using:
   - Kalman filter for bbox state prediction (constant-velocity model)
   - Hungarian algorithm (scipy) for optimal assignment
@@ -8,13 +8,10 @@ Multi-object tracker using:
   - Track confirmation gate (tentative → confirmed)
   - 3D position fallback cost for small or occluded objects
 
-Rules (from TRIFFID spec):
-  - IDs are persistent and NEVER reused
+Effectively:
+  - IDs are persistent and never reused
   - If an object disappears, its ID is retired
   - Counter never resets
-
-Replaces the PoC greedy IoU matcher with a tracker suitable for
-frame-by-frame inference where detections flicker.
 """
 
 import numpy as np

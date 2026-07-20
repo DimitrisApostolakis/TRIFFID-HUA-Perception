@@ -28,9 +28,7 @@ from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
 # Spatial helpers (used by accumulate_collection)
-# ---------------------------------------------------------------------------
 
 def _haversine_m(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
     import math as _math
@@ -63,9 +61,7 @@ def _feature_centroid(feature: dict):
     return None
 
 
-# ---------------------------------------------------------------------------
 # Defaults
-# ---------------------------------------------------------------------------
 _DEFAULT_BASE = 'https://crispres.com/wp-json/map-manager/v1'
 _DEFAULT_OBSERVER = 'https://crispres.com/wp-json/observer-sync/v1'
 _TIMEOUT = 15  # seconds
@@ -148,9 +144,7 @@ class TelestoClient:
         # Track remote feature IDs we've created, keyed by (source, local_id)
         self._remote_ids: Dict[tuple, str] = {}
 
-    # ------------------------------------------------------------------
     # Feature CRUD
-    # ------------------------------------------------------------------
 
     def get_features(self) -> dict:
         """GET all features.  Returns the full FeatureCollection."""
@@ -212,9 +206,7 @@ class TelestoClient:
             timeout=self.timeout,
         )
 
-    # ------------------------------------------------------------------
     # Bulk operations
-    # ------------------------------------------------------------------
 
     def upload_collection(self, collection: dict) -> List[dict]:
         """Upload every feature in a FeatureCollection via PUT.
@@ -437,9 +429,7 @@ class TelestoClient:
                     log.error(f'DELETE failed: {e}')
         return deleted
 
-    # ------------------------------------------------------------------
     # Observer API
-    # ------------------------------------------------------------------
 
     def get_observer_status(self) -> dict:
         """GET observer sync status."""

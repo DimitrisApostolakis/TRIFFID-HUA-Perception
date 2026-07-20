@@ -16,9 +16,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Python deps
 # Pin numpy<2 because ROS2 Humble cv_bridge was compiled against NumPy 1.x.
-# packaging>=22 is required by modern setuptools (colcon build of
-# ament_python packages fails on the jammy system packaging 21.3 with
-# "canonicalize_version() got an unexpected keyword argument").
 RUN pip3 install --no-cache-dir \
     "numpy<2" \
     "packaging>=22" \

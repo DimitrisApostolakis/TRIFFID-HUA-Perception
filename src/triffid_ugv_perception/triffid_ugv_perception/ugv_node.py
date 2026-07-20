@@ -1,11 +1,10 @@
 """
 TRIFFID UGV Perception Node
-============================
+
 Pixel-aligned RGB-D perception pipeline:
 
-  RGB and depth come from a single pixel-aligned camera (e.g. RealSense
-  with depth-to-color alignment).  The depth image shares the same
-  resolution and intrinsics as the RGB image, so depth can be sampled
+  RGB and depth come from a single pixel-aligned camera (RealSense).
+  The depth image shares the same resolution and intrinsics as the RGB image, so depth can be sampled
   directly at each detection's pixel coordinates.
 
   1. Subscribe to RGB + aligned Depth + shared CameraInfo + TF
@@ -16,15 +15,6 @@ Pixel-aligned RGB-D perception pipeline:
   6. Transform camera_optical_frame → b2/base_link via TF2
   7. Assign persistent tracking ID (IoU tracker on RGB bboxes)
   8. Publish vision_msgs/Detection3DArray in b2/base_link
-
-Topic mapping (placeholders — update when partner topic names are final):
-  IN:  <rgb_image_topic>          (sensor_msgs/Image, bgr8)
-  IN:  <depth_image_topic>        (sensor_msgs/Image, 16UC1 mm, pixel-aligned to RGB)
-  IN:  <camera_info_topic>        (sensor_msgs/CameraInfo, shared intrinsics)
-  IN:  /tf, /tf_static
-  OUT: /ugv/detections/front/detections_3d   (vision_msgs/Detection3DArray, frame: b2/base_link)
-  OUT: /ugv/detections/front/segmentation    (sensor_msgs/Image, mono8 label map)
-  OUT: /ugv/detections/front/debug_image     (sensor_msgs/Image, bgr8 overlay)
 """
 
 import rclpy
@@ -51,7 +41,6 @@ except ImportError:
     _HAS_YOLO = False
 
 
-# TRIFFID custom model classes (yolo11l-seg fine-tuned)
 TARGET_CLASSES = {
     0: 'water',
     1: 'fence',
@@ -121,10 +110,7 @@ TARGET_CLASSES = {
 # Frame IDs
 BASE_FRAME = 'b2/base_link'
 
-# Default topic names: the rosbag-replay set (matches
-# config/bag_qos_overrides.yaml and run.sh). Live-camera topics are passed
-# in by run.sh (SOURCE=live) or via the rgb_image_topic/... parameters;
-# final partner names under the /b2/ namespace are still pending.
+# Default topic names
 DEFAULT_RGB_TOPIC = '/camera_front/raw_image'
 DEFAULT_DEPTH_TOPIC = '/camera_front/realsense_front/depth/image_rect_raw'
 DEFAULT_CAMERA_INFO_TOPIC = '/camera_front/camera_info'

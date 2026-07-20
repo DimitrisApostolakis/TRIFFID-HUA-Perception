@@ -1,29 +1,12 @@
 """
 TRIFFID UAV Perception Node
-=============================
-Standalone pipeline (no ROS2) that processes drone video:
-
-  1. Read frames from a video file — either a local recording, or (PoC,
-     --poll-api) a video polled from the FUTURISED media-upload API. See
-     api_client.py; FUTURISED does not stream live video today, it serves
-     uploaded files the same way it serves images, so "live" here means
-     "poll for newly uploaded videos and process each one."
-  2. Run the YOLO-seg model with persistent ByteTrack IDs across frames
-  3. Reduce each detection to a handful of independent pixel sample points
-     (not an outline) — how many is decided by its classes.txt geometry
-     type (Point / Line / Polygon), purely to control sampling density
-  4. Save one GeoJSON FeatureCollection per video, in PIXEL coordinates —
-     a downstream consumer raycasts each point independently against a
-     3D Gaussian Splatting reconstruction to recover real-world coordinates
-  5. Optionally (--post-telesto, off by default) upload the collection to
-     the TELESTO backend — only meaningful once coordinates are geographic
 
 Usage:
   python -m triffid_uav_perception.uav_node video.mp4
   python -m triffid_uav_perception.uav_node video.mp4 \\
       --model best.pt --stride 5 --sample-seconds 1.0 --output ./samples
 
-  # PoC: poll FUTURISED for new video uploads instead of a local file
+  poll API for new video uploads instead of a local file
   python -m triffid_uav_perception.uav_node --poll-api \\
       --api-media-key "$FUTURISED_MEDIA_API_KEY" --output ./uav_samples
 """
@@ -52,7 +35,6 @@ except ImportError:
 log = logging.getLogger('triffid_uav')
 
 
-# Same 63 classes as UGV (shared TRIFFID model)
 TARGET_CLASSES = {
     0: 'water', 1: 'fence', 2: 'green tree', 3: 'helmet',
     4: 'flame', 5: 'smoke', 6: 'first responder', 7: 'destroyed vehicle',

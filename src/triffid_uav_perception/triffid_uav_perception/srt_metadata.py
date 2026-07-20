@@ -1,42 +1,5 @@
 """
 DJI SRT Telemetry Parser
-=========================
-FUTURISED delivers drone video as an MP4 plus a sidecar ``.SRT`` file
-carrying per-frame telemetry (DJI drones write one subtitle block per
-video frame). This module parses that SRT into per-frame records and
-provides a frame-indexed lookup so ``process_video`` can attach drone
-position / gimbal attitude to every emitted detection.
-
-Two known DJI SRT flavours are supported (scraped tolerantly — unknown
-keys are ignored, missing keys yield ``None``):
-
-Modern bracketed (M30 / Mavic 3 style)::
-
-    1
-    00:00:00,000 --> 00:00:00,033
-    <font size="28">FrameCnt: 1, DiffTime: 33ms
-    2026-07-17 12:00:00.123
-    [iso: 100] [shutter: 1/1000] [fnum: 2.8]
-    [latitude: 49.726349] [longitude: 13.350951]
-    [rel_alt: 36.280 abs_alt: 431.531]
-    [gb_yaw: 84.1 gb_pitch: -24.5 gb_roll: 0.0]</font>
-
-Legacy (older Mavic/Phantom style)::
-
-    1
-    00:00:00,000 --> 00:00:01,000
-    GPS(13.350951,49.726349,431.5) BAROMETER:36.2
-    H 36.2m
-
-Field names follow the conventions the project already standardized in
-the (since removed) DJI XMP ``DJIMetadata`` dataclass: ``lat``, ``lon``,
-``abs_alt``, ``rel_alt``, ``gimbal_yaw``, ``gimbal_pitch``,
-``gimbal_roll``.
-
-Note: some DJI models embed the telemetry as a subtitle *stream inside
-the MP4* instead of a sidecar file. Extracting that requires ffmpeg
-(``ffmpeg -i in.mp4 -map 0:s:0 out.srt``), which is not installed in the
-UAV image — this module only handles sidecar files.
 """
 
 import bisect

@@ -6,9 +6,7 @@ services:
     image: triffid_uav_perception:latest
     container_name: triffid_uav_perception
 
-    # GPU access (video mode / large models). Requires the NVIDIA container
-    # runtime on the host; on CPU-only hosts the cu121 torch wheel still runs
-    # on the CPU, so remove this block if no GPU is available.
+    # GPU access, remove this block if no GPU is available.
     deploy:
       resources:
         reservations:
@@ -23,8 +21,7 @@ services:
       - ./uav_data:/app/uav_data                                      # additional input media
       - ./uav_videos:/app/videos                                      # input videos
       - ./uav_samples:/app/samples                                    # output GeoJSON
-      - ./best.pt:/app/best.pt:ro                                     # YOLO model weights
-      - ./classes.txt:/app/classes.txt:ro                             # class table (consistency test)
+      - ./best.pt:/app/best.pt:ro                                     # model weights
 
     network_mode: host    # so --post-telesto can reach the network directly
     ipc: host

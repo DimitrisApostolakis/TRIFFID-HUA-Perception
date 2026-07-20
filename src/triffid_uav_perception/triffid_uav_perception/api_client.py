@@ -1,9 +1,6 @@
 """
-FUTURISED API Client
-=====================
+API Client
 Fetches DJI drone images and telemetry from the FUTURISED platform.
-
-Two independent API layers:
 
 1. **Media Files API** (``dji.getfuturised.com``)
    - Lists uploaded media files (images + video)
@@ -13,11 +10,6 @@ Two independent API layers:
 2. **Telemetry API** (``api.getfuturised.com/getDJIData``)
    - Returns drone state records (position, heading, batteries, gimbal target)
    - Auth: ``Authorization: Bearer <token>``
-
-Typical workflow for image processing:
-  1. ``list_media()`` → discover new JPG files
-  2. ``download_image()`` → fetch JPEG to local disk
-  3. Process through the existing pipeline (XMP metadata is embedded in the JPEG)
 """
 
 import json
