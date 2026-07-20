@@ -1,0 +1,31 @@
+# Input media (videos + SRT sidecars, downloaded or local)
+*.mp4
+*.MP4
+*.srt
+*.SRT
+uav_videos/
+uav_data/
+
+# Runtime output directories (GeoJSON snapshots / detection runs)
+samples/
+uav_samples/
+
+# ROS2 colcon build artifacts
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# Editor / OS
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# Secrets / credentials
+*.env
