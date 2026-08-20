@@ -132,18 +132,8 @@ _CLASS_SYMBOLS = {
 }
 
 
-# ── Geometry mapping (single source of truth: classes.txt) ───────────
-#
-# Each class id maps to the "GeoJSON Type" agreed in classes.txt, which
-# decides how many boundary pixel points we emit per detection for
-# downstream 3DGS raycasting:
-#   Point   → 1 point  (centroid)
-#   Line    → 4 points (min-area-rect corners — keeps the structure's height,
-#                       not just its ground line)
-#   Polygon → 4 points (min-area-rect corners), or a simplified 8–12 pt
-#             contour for the large/irregular area classes below.
-# Transcribed from classes.txt; TestClassesTxtConsistency in the unit suite
-# asserts this table matches the file, so drift fails CI-style.
+# Per-class geometry: how many pixel sample points to emit per detection.
+# Point=1 (centroid), Line=4 (rect corners), Polygon=4 or 8-12 for large areas.
 _GEOMETRY_TYPE_BY_ID = {
     0: 'Polygon',   # Water
     1: 'Line',      # Fence
@@ -210,8 +200,7 @@ _GEOMETRY_TYPE_BY_ID = {
     62: 'Point',    # Extinguisher
 }
 
-# Large / irregular Polygon classes whose shape isn't captured by 4 corners —
-# these get a simplified contour (~8–12 points) instead. Editable.
+# Large/irregular classes get a simplified contour instead of 4 corners.
 _LARGE_AREA_CLASS_IDS = {
     0,   # Water
     16,  # Debris
@@ -227,13 +216,7 @@ _LARGE_AREA_CLASS_IDS = {
 
 def _simplify_contour(pts: np.ndarray, lo: int = 8, hi: int = 12,
                       max_iter: int = 16):
-    """Reduce a contour to between ``lo`` and ``hi`` points via approxPolyDP.
-
-    Bisection-searches the Douglas–Peucker epsilon (as a fraction of the
-    contour perimeter): a larger epsilon yields fewer points. Returns an
-    ``(N, 2)`` array with ``lo <= N <= hi`` when possible (capped at ``hi``),
-    or ``None`` if the contour is degenerate.
-    """
+    """Simplify a contour to lo..hi points by bisecting the DP epsilon."""
     cnt = pts.reshape(-1, 1, 2).astype(np.float32)
     peri = cv2.arcLength(cnt, True)
     if peri <= 0:
@@ -263,24 +246,7 @@ def _simplify_contour(pts: np.ndarray, lo: int = 8, hi: int = 12,
 
 def _boundary_points(contour_xy, geometry_type: str, class_id: int,
                      bbox=None) -> list:
-    """Reduce a detection to a few boundary pixel points for raycasting.
-
-    Parameters
-    ----------
-    contour_xy : array-like or None
-        ``(N, 2)`` mask contour points in original-frame pixels (e.g.
-        ``masks.xy[i]``), or None when the model produced no mask.
-    geometry_type : str
-        ``'Point' | 'Line' | 'Polygon'`` from ``_GEOMETRY_TYPE_BY_ID``.
-    class_id : int
-        Selects the large-area contour branch for Polygon classes.
-    bbox : sequence or None
-        ``[x1, y1, x2, y2]`` fallback when no usable contour is available.
-
-    Returns a list of ``[x, y]`` points rounded to 1 decimal:
-    Point → 1, Line → 4 (min-area-rect corners), Polygon → 4 corners or
-    8–12 simplified-contour points for large-area classes.
-    """
+    """Reduce a mask contour (or bbox fallback) to a few [x, y] sample points."""
     def _round(arr):
         return [[round(float(x), 1), round(float(y), 1)] for x, y in arr]
 
@@ -315,28 +281,12 @@ def _boundary_points(contour_xy, geometry_type: str, class_id: int,
 def _detection_to_pixel_feature(det: dict, frame_index: int,
                                 timestamp_s: float,
                                 frame_meta=None) -> dict:
-    """Convert one tracked detection into a pixel-space GeoJSON Feature.
+    """Build a pixel-space GeoJSON Feature from one tracked detection.
 
-    The geometry is a **bag of independent sample points** for raycasting,
-    not an outline: single-point classes (``classes.txt`` "Point") become a
-    GeoJSON ``Point``; everything else (``Line``/``Polygon`` classes, which
-    just get more sample points — 4, or 8-12 for large-area classes) becomes
-    a GeoJSON ``MultiPoint``. There is no implied ordering, connectivity, or
-    closed boundary between the points — each one is meant to be raycast
-    independently against the 3DGS reconstruction. ``classes_txt_geometry``
-    keeps the original classes.txt classification for traceability only; it
-    does not describe the shape of ``geometry`` here.
-
-    Coordinates are ``[x, y]`` pixels in the original frame resolution.
-
-    When ``frame_meta`` (an ``SrtFrameMeta`` from the sidecar SRT) is
-    given, the *drone/camera* telemetry for this frame is attached as
-    ``drone_*`` / ``gimbal_*`` properties — these describe where the
-    camera was, not where the detection is, and are meant as input for
-    the downstream raycast.
-
-    Properties otherwise mirror the UGV geojson_bridge feature schema so
-    both platforms render consistently on the TELESTO map.
+    Geometry is a bag of independent raycast points, not an outline —
+    Point classes get a GeoJSON Point, everything else MultiPoint (no
+    ordering/closure implied). frame_meta (SrtFrameMeta) attaches the
+    camera's own position/attitude for that frame, not the detection's.
     """
     label = det['label']
     points = det['points']
@@ -387,12 +337,7 @@ def _detection_to_pixel_feature(det: dict, frame_index: int,
 
 
 def _build_feature_collection(features: list, metadata: dict) -> dict:
-    """Assemble the output FeatureCollection.
-
-    ``metadata`` is attached as a top-level foreign member (permitted by
-    RFC 7946 §6.1) so per-video context travels with the features without
-    colliding with per-feature ``properties``.
-    """
+    """Wrap features + run metadata (RFC 7946 foreign member) into a collection."""
     return {
         "type": "FeatureCollection",
         "metadata": metadata,
@@ -427,11 +372,8 @@ def _parse_class_filter(spec: Optional[str]) -> Optional[set]:
 
 
 def _open_video(video_path: str):
-    """Open a video and return ``(cap, fps, width, height, total_frames)``.
-
-    Returns ``None`` when the file cannot be opened. Falls back to 30 fps
-    when the container reports no frame rate (timestamps stay usable).
-    """
+    """Open a video, return (cap, fps, width, height, total_frames) or
+    None. Falls back to 30 fps if the container reports none."""
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         log.error(f'Failed to open video: {video_path}')
@@ -445,6 +387,42 @@ def _open_video(video_path: str):
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     return cap, fps, width, height, total
+
+
+def _track_color(track_id: int):
+    if track_id < 0:
+        return (150, 150, 150)
+    return (int((37 * track_id) % 255), int((97 * track_id) % 255),
+            int((173 * track_id) % 255))
+
+
+def _draw_debug_overlay(frame: np.ndarray, detections: list) -> np.ndarray:
+    """Draw bbox + label + sample points per detection, for the debug video."""
+    img = frame.copy()
+    for det in detections:
+        color = _track_color(det['id'])
+        x1, y1, x2, y2 = (int(round(v)) for v in det['bbox'])
+        cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+        label = f"{det['label']} #{det['id']} {det['confidence']:.2f}"
+        cv2.putText(img, label, (x1, max(20, y1 - 8)),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
+        for px, py in det['points']:
+            cv2.circle(img, (int(round(px)), int(round(py))), 5, color, -1)
+    return img
+
+
+def _debug_frame_size(width: int, height: int, max_width: int):
+    """Target debug-video size, downscaled to max_width, even dimensions."""
+    if width > max_width:
+        height = round(height * max_width / width)
+        width = max_width
+    return width - (width % 2), height - (height % 2)
+
+
+def _debug_video_path(video_path: str, output_dir: Optional[str]) -> Path:
+    out = Path(output_dir) if output_dir else Path(video_path).parent
+    out.mkdir(parents=True, exist_ok=True)
+    return out / f'{Path(video_path).stem}_debug.mp4'
 
 
 class UAVPipeline:
@@ -477,43 +455,20 @@ class UAVPipeline:
         sample_seconds: float = 1.0,
         classes: Optional[set] = None,
         srt_path: Optional[str] = None,
+        debug_video: bool = False,
+        debug_video_seconds: float = 20.0,
+        debug_video_start_s: float = 0.0,
+        debug_video_width: int = 1280,
     ) -> Optional[dict]:
         """Run detection + tracking over a video, emit pixel-space GeoJSON.
 
-        For every ``stride``-th frame, runs the YOLO-seg model with
-        persistent track IDs. Each detection is reduced to a few independent
-        pixel sample points (count decided by its ``classes.txt`` geometry
-        type — not an outline), in the *original* frame resolution
-        (origin = top-left), and becomes one GeoJSON Feature.
-
-        To keep the output small, emission is **deduplicated per track**: a
-        given track id is written at most once every ``sample_seconds``.
-        Tracking still runs on every ``stride`` frame so ids stay stable;
-        only the writing is throttled.
-
-        Parameters
-        ----------
-        video_path : str
-            Path to the input video file.
-        output_path : str, optional
-            Directory to write ``<video-stem>_detections.geojson`` into
-            (None = don't write, just return the collection).
-        stride : int
-            Process every Nth frame (1 = every frame).
-        tracker : str
-            Ultralytics tracker config (``bytetrack.yaml`` or
-            ``botsort.yaml``).
-        sample_seconds : float
-            Minimum seconds between successive emissions of the same track
-            id (0 = emit on every processed frame).
-        classes : set of int/str, optional
-            Allowlist of class ids and/or labels to keep (None = all).
-        srt_path : str, optional
-            DJI SRT telemetry sidecar. When None, ``<video-stem>.srt`` /
-            ``.SRT`` next to the video is auto-detected. Per-frame drone
-            position/gimbal telemetry is attached to each feature.
-
-        Returns the FeatureCollection dict, or None on failure.
+        Tracks every ``stride``-th frame; emission of a given track id is
+        throttled to once per ``sample_seconds`` to keep output small (the
+        tracker itself still runs every frame, only writing is skipped).
+        ``srt_path`` auto-detects the sidecar next to the video if unset.
+        ``debug_video`` also saves ``<stem>_debug.mp4`` with boxes/points/
+        labels drawn on top, for a ``debug_video_seconds`` window.
+        Returns the FeatureCollection, or None on failure.
         """
         video_path = str(video_path)
         if stride < 1:
@@ -560,12 +515,23 @@ class UAVPipeline:
         frame_idx = 0
         processed = 0
         last_emit = {}          # track_id -> timestamp_s of last written record
+        last_debug_dets = []    # carried over onto skipped frames
         t_start = time.time()
+
+        debug_writer = None
+        debug_path = None
+        debug_start_frame = round(debug_video_start_s * fps)
+        debug_end_frame = round((debug_video_start_s + debug_video_seconds) * fps)
+        debug_size = _debug_frame_size(width, height, debug_video_width)
 
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
+
+            in_debug_window = (
+                debug_video and debug_start_frame <= frame_idx < debug_end_frame
+            )
 
             if frame_idx % stride == 0:
                 detections = self._track_frame(frame, tracker)
@@ -576,11 +542,11 @@ class UAVPipeline:
                     srt_index.at(frame_idx, timestamp_s)
                     if srt_index is not None else None
                 )
-                for det in detections:
-                    if classes is not None and not (
-                        det['class_id'] in classes or det['label'] in classes
-                    ):
-                        continue
+                visible = detections if classes is None else [
+                    d for d in detections
+                    if d['class_id'] in classes or d['label'] in classes
+                ]
+                for det in visible:
                     tid = det['id']
                     last = last_emit.get(tid)
                     # New track, untracked (-1), or enough time elapsed → emit.
@@ -593,6 +559,9 @@ class UAVPipeline:
                         if tid >= 0:
                             last_emit[tid] = timestamp_s
 
+                if in_debug_window:
+                    last_debug_dets = visible
+
                 if processed % 100 == 0:
                     elapsed = time.time() - t_start
                     rate = processed / elapsed if elapsed > 0 else 0.0
@@ -602,9 +571,25 @@ class UAVPipeline:
                         f'{rate:.1f} proc-fps)'
                     )
 
+            if in_debug_window:
+                if debug_writer is None:
+                    debug_path = _debug_video_path(video_path, output_path)
+                    debug_writer = cv2.VideoWriter(
+                        str(debug_path), cv2.VideoWriter_fourcc(*'mp4v'),
+                        fps, debug_size,
+                    )
+                    log.info(f'Recording debug video: {debug_path}')
+                annotated = _draw_debug_overlay(frame, last_debug_dets)
+                debug_writer.write(cv2.resize(annotated, debug_size))
+            elif debug_writer is not None:
+                debug_writer.release()
+                debug_writer = None
+
             frame_idx += 1
 
         cap.release()
+        if debug_writer is not None:
+            debug_writer.release()
 
         metadata = {
             'video': os.path.basename(video_path),
@@ -624,6 +609,7 @@ class UAVPipeline:
             'geometry_source': 'classes.txt',
             'srt_file': srt_file.name if srt_index is not None else None,
             'srt_frames': len(srt_index) if srt_index is not None else 0,
+            'debug_video': debug_path.name if debug_path else None,
             'processed_frames': processed,
             'total_detections': len(features),
             'coordinate_space': (
@@ -641,6 +627,8 @@ class UAVPipeline:
             f'Done: {processed} frames processed in {elapsed:.1f}s, '
             f'{len(features)} detections emitted.'
         )
+        if debug_path:
+            log.info(f'Saved debug video: {debug_path}')
 
         if output_path:
             path = _write_geojson(collection, video_path, output_path)
@@ -649,15 +637,8 @@ class UAVPipeline:
         return collection
 
     def _track_frame(self, frame: np.ndarray, tracker: str) -> list:
-        """Run tracked YOLO-seg on one frame, return pixel-space detections.
-
-        Every detection carries the persistent track ``id``, class
-        ``label``/``class_id``, ``confidence``, ``bbox`` ([x1,y1,x2,y2]),
-        a ``geometry_type`` (from ``classes.txt`` via
-        ``_GEOMETRY_TYPE_BY_ID``) and a short ``points`` list — Point→1,
-        Line→4, Polygon→4 (or 8–12 for large-area classes) — ready for
-        downstream 3DGS raycasting.
-        """
+        """Run tracked YOLO-seg on one frame, return pixel-space detections
+        (id, label, class_id, confidence, bbox, geometry_type, points)."""
         results = self.model.track(
             frame,
             persist=True,
@@ -706,9 +687,7 @@ class UAVPipeline:
 
 
 def _upload_to_telesto(collection: dict, telesto_base_url: str = '') -> int:
-    """Upload a FeatureCollection to TELESTO via telesto_client. Returns
-    the number of features uploaded. Raises SystemExit if the package
-    (repo-local, not pip-installed) isn't on PYTHONPATH."""
+    """Upload a FeatureCollection to TELESTO, return the feature count."""
     try:
         from triffid_telesto.telesto_client import TelestoClient
     except ImportError as e:
@@ -730,16 +709,11 @@ def _poll_api_video_once(pipeline: UAVPipeline, client: FuturisedClient,
                          post_telesto: bool = False,
                          telesto_base_url: str = '',
                          **video_kwargs) -> int:
-    """One poll+download+process pass. Returns the number of videos processed.
+    """One poll+download+process pass; returns videos processed.
 
-    ``.SRT`` sidecars are polled alongside the videos: they download into
-    the same directory, where ``process_video``'s ``find_sidecar_srt``
-    pairs them with their MP4 by matching basename. PoC limitation: if an
-    SRT upload appears only *after* its MP4 was already processed, the
-    video is not reprocessed.
-
-    Split out from the poll loop so it's unit-testable without mocking
-    ``time.sleep``/``KeyboardInterrupt``.
+    .SRT sidecars download alongside their .MP4 and get paired by
+    basename in process_video. If the SRT lands after its video was
+    already processed, that video isn't reprocessed.
     """
     new_files = client.poll_new_images(
         camera_filter=camera, extensions={'.MP4', '.MOV', '.SRT'},
@@ -762,10 +736,8 @@ def _poll_api_video(pipeline: UAVPipeline, client: FuturisedClient,
                     output_path: Optional[str], **video_kwargs):
     """Poll FUTURISED for new video uploads and process each one (PoC).
 
-    FUTURISED's Media Files API serves *uploaded* files, not a continuous
-    stream — this polls for newly-appeared ``.MP4``/``.MOV`` files the same
-    way the old still-image poll mode watched for JPEGs, and runs the full
-    video pipeline on each as it's found.
+    FUTURISED serves uploaded files, not a continuous stream, so this
+    just polls for new .MP4/.MOV uploads and runs process_video on each.
     """
     log.info(
         f'Polling FUTURISED for new video uploads every {poll_interval}s '
@@ -815,6 +787,17 @@ def main():
                              '(default: auto-detect <video-stem>.srt next '
                              'to it). Attaches per-frame drone position/'
                              'gimbal properties to each feature.')
+    parser.add_argument('--debug-video', action='store_true',
+                        help='Also save <video-stem>_debug.mp4 with boxes/'
+                             'points/labels drawn on top, for a short '
+                             'window of the video (for eyeballing whether '
+                             'detections look right).')
+    parser.add_argument('--debug-video-seconds', type=float, default=20.0,
+                        help='Length of the debug video window in seconds '
+                             '(default: 20.0)')
+    parser.add_argument('--debug-video-start', type=float, default=0.0,
+                        help='Start offset of the debug video window in '
+                             'seconds (default: 0.0)')
     parser.add_argument('--post-telesto', action='store_true',
                         help='Upload the resulting FeatureCollection to the '
                              'TELESTO backend (default: off). Only meaningful '
@@ -891,6 +874,9 @@ def main():
         tracker=args.tracker,
         sample_seconds=args.sample_seconds,
         classes=_parse_class_filter(args.classes),
+        debug_video=args.debug_video,
+        debug_video_seconds=args.debug_video_seconds,
+        debug_video_start_s=args.debug_video_start,
     )
 
     if args.poll_api:

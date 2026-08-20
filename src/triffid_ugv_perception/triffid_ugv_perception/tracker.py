@@ -1,17 +1,9 @@
 """
 ByteTrack-style Tracker for TRIFFID Perception
 
-Multi-object tracker using:
-  - Kalman filter for bbox state prediction (constant-velocity model)
-  - Hungarian algorithm (scipy) for optimal assignment
-  - Two-pass association (high-confidence first, then low-confidence)
-  - Track confirmation gate (tentative → confirmed)
-  - 3D position fallback cost for small or occluded objects
-
-Effectively:
-  - IDs are persistent and never reused
-  - If an object disappears, its ID is retired
-  - Counter never resets
+Kalman-predicted bboxes, two-pass Hungarian association (high-confidence
+first), tentative->confirmed gate, 3D position as a fallback cost. IDs
+are persistent and never reused/reset.
 """
 
 import numpy as np
@@ -28,13 +20,8 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 class _KalmanBBox:
-    """Constant-velocity Kalman filter on (cx, cy, aspect, h).
-
-    State  x = [cx, cy, a, h, vx, vy, va, vh]^T   (8-dim)
-    Measurement z = [cx, cy, a, h]^T                (4-dim)
-
-    This is the same model used in SORT / DeepSORT / ByteTrack.
-    """
+    """Constant-velocity Kalman filter on (cx, cy, aspect, h) — the same
+    8-state model used in SORT/DeepSORT/ByteTrack."""
 
     _STD_WEIGHT_POS = 1.0 / 20.0
     _STD_WEIGHT_VEL = 1.0 / 160.0
@@ -189,10 +176,7 @@ class _Track:
 # ---------------------------------------------------------------------------
 
 def _iou_batch(bboxes_a, bboxes_b):
-    """Vectorised IoU between two sets of (x1,y1,x2,y2) boxes.
-
-    Returns (M, N) IoU matrix.
-    """
+    """Vectorised (M, N) IoU matrix between two sets of (x1,y1,x2,y2) boxes."""
     a = np.asarray(bboxes_a, dtype=np.float64)
     b = np.asarray(bboxes_b, dtype=np.float64)
     if a.ndim == 1:
@@ -215,11 +199,7 @@ def _iou_batch(bboxes_a, bboxes_b):
 
 
 def _pos_distance_batch(positions_a, positions_b):
-    """Euclidean distance between two sets of 3D positions.
-
-    Returns (M, N) distance matrix.  Entries where either position is
-    None are set to inf.
-    """
+    """(M, N) Euclidean distance matrix; inf where either position is None."""
     M = len(positions_a)
     N = len(positions_b)
     dist = np.full((M, N), np.inf, dtype=np.float64)
@@ -242,22 +222,11 @@ def _pos_distance_batch(positions_a, positions_b):
 class ByteTracker:
     """ByteTrack-style multi-object tracker with Kalman prediction.
 
-    Parameters
-    ----------
-    iou_threshold : float
-        Minimum IoU for first-pass association (high-confidence).
-    iou_threshold_low : float
-        Minimum IoU for second-pass association (low-confidence).
-    conf_threshold_high : float
-        Confidence split between high and low association passes.
-    max_age : int
-        Maximum frames a lost track is kept before removal.
-    n_init : int
-        Consecutive detections needed to confirm a tentative track.
-        Unconfirmed tracks are not published.
-    pos_gate : float
-        Maximum 3D Euclidean distance (metres) for a match.
-        Used as auxiliary gate when IoU is unreliable (small boxes).
+    iou_threshold/iou_threshold_low gate the two association passes
+    (split by conf_threshold_high); pos_gate (metres) is an auxiliary
+    3D-distance gate for when IoU is unreliable (small boxes); n_init
+    confirmations are required before a track is published; max_age
+    frames without a match before a track is dropped.
     """
 
     def __init__(
@@ -279,25 +248,9 @@ class ByteTracker:
         self.next_id = 1
         self.tracks = []   # list of _Track objects
 
-    # ------------------------------------------------------------------
-    #  Public API  (same return format as old IoUTracker.update)
-    # ------------------------------------------------------------------
-
     def update(self, detections):
-        """Update tracker with new detections.
-
-        Args:
-            detections: list of dicts with keys:
-                'bbox': (x1, y1, x2, y2)
-                'class_id': int
-                'class_name': str
-                'confidence': float
-                'position': (x, y, z) or None
-
-        Returns:
-            list of dicts (confirmed tracks only) with added
-            'track_id' key.
-        """
+        """Update with new detections (bbox/class_id/class_name/confidence/
+        position dicts); returns confirmed tracks with a track_id added."""
         for track in self.tracks:
             track.predict()
 
@@ -371,11 +324,8 @@ class ByteTracker:
     # ------------------------------------------------------------------
 
     def _associate(self, tracks, detections, iou_thresh):
-        """Match tracks to detections using IoU + 3D position gate.
-
-        Returns (matched_track_idx, matched_det_idx,
-                 unmatched_track_idx, unmatched_det_idx).
-        """
+        """Match via IoU + 3D position gate; returns (matched_track_idx,
+        matched_det_idx, unmatched_track_idx, unmatched_det_idx)."""
         if not tracks or not detections:
             return ([], [],
                     list(range(len(tracks))),
@@ -486,47 +436,3 @@ class ByteTracker:
                 'track_id': t.id,
             })
         return results
-
-
-# ---------------------------------------------------------------------------
-#  Legacy alias — keeps old imports working
-# ---------------------------------------------------------------------------
-
-class IoUTracker(ByteTracker):
-    """Drop-in replacement: delegates to ByteTracker.
-
-    Accepts the old constructor signature
-    ``IoUTracker(iou_threshold=0.3, max_age=10)``
-    and maps it to ByteTracker defaults.  ``n_init=1`` preserves the
-    original behaviour of publishing tracks immediately (no confirmation gate).
-    """
-
-    def __init__(self, iou_threshold=0.3, max_age=10, **kwargs):
-        super().__init__(
-            iou_threshold=iou_threshold,
-            max_age=max_age,
-            n_init=kwargs.pop('n_init', 1),
-            pos_gate=kwargs.pop('pos_gate', 2.0),
-            **kwargs,
-        )
-
-    @staticmethod
-    def _compute_iou(bbox_a, bbox_b):
-        """Compute IoU between two bounding boxes (x1, y1, x2, y2).
-
-        Kept for backward-compatibility with existing tests.
-        """
-        x1 = max(bbox_a[0], bbox_b[0])
-        y1 = max(bbox_a[1], bbox_b[1])
-        x2 = min(bbox_a[2], bbox_b[2])
-        y2 = min(bbox_a[3], bbox_b[3])
-
-        inter = max(0, x2 - x1) * max(0, y2 - y1)
-        if inter == 0:
-            return 0.0
-
-        area_a = (bbox_a[2] - bbox_a[0]) * (bbox_a[3] - bbox_a[1])
-        area_b = (bbox_b[2] - bbox_b[0]) * (bbox_b[3] - bbox_b[1])
-        union = area_a + area_b - inter
-
-        return inter / union if union > 0 else 0.0

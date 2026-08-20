@@ -1,15 +1,9 @@
 """
-API Client
-Fetches DJI drone images and telemetry from the FUTURISED platform.
+FUTURISED API Client
 
-1. **Media Files API** (``dji.getfuturised.com``)
-   - Lists uploaded media files (images + video)
-   - Provides temporary S3 download URLs
-   - Auth: ``x-api-key`` header
-
-2. **Telemetry API** (``api.getfuturised.com/getDJIData``)
-   - Returns drone state records (position, heading, batteries, gimbal target)
-   - Auth: ``Authorization: Bearer <token>``
+Media Files API (dji.getfuturised.com, x-api-key auth): lists uploaded
+media, gives temporary S3 download URLs. Telemetry API
+(api.getfuturised.com/getDJIData, bearer auth): drone state records.
 """
 
 import json
@@ -51,25 +45,7 @@ class MediaFile:
 
 
 class FuturisedClient:
-    """Client for the FUTURISED DJI image and telemetry APIs.
-
-    Parameters
-    ----------
-    media_api_key : str
-        API key for ``dji.getfuturised.com`` (``x-api-key`` header).
-    org_id : str
-        Organisation UUID for the media files endpoint.
-    media_base_url : str
-        Base URL for the media API.
-    telemetry_token : str, optional
-        Bearer token for ``api.getfuturised.com/getDJIData``.
-    telemetry_project : str
-        Project name in the telemetry path (e.g. ``Triffid_test``).
-    telemetry_base_url : str
-        Base URL for the telemetry API.
-    download_dir : str or Path
-        Local directory where downloaded images are saved.
-    """
+    """Client for the FUTURISED DJI image and telemetry APIs."""
 
     def __init__(
         self,
@@ -96,18 +72,7 @@ class FuturisedClient:
     # ── Media Files API ─────────────────────────────────────────
 
     def list_media(self, uploaded_after: int = 0) -> List[MediaFile]:
-        """List available media files from the FUTURISED cloud.
-
-        Parameters
-        ----------
-        uploaded_after : int
-            Unix timestamp in milliseconds. Only files uploaded after this
-            time are returned. Use 0 to list all files.
-
-        Returns
-        -------
-        list of MediaFile
-        """
+        """List media files uploaded after uploaded_after (epoch ms; 0 = all)."""
         url = (
             f'{self._media_base}/organization/{self._org_id}'
             f'/dji_media_files?uploaded_after={uploaded_after}'
@@ -139,17 +104,7 @@ class FuturisedClient:
         return files
 
     def get_file_details(self, file_id: str) -> Optional[MediaFile]:
-        """Fetch metadata and a temporary download URL for a media file.
-
-        Parameters
-        ----------
-        file_id : str
-            UUID of the media file (from ``list_media``).
-
-        Returns
-        -------
-        MediaFile with ``download_url`` populated, or None on error.
-        """
+        """Fetch a MediaFile (from list_media's id) with download_url populated."""
         url = (
             f'{self._media_base}/organization/{self._org_id}'
             f'/dji_media_files/{file_id}'
@@ -178,13 +133,8 @@ class FuturisedClient:
         )
 
     def download_image(self, file_id: str) -> Optional[Path]:
-        """Download a media file to the local download directory.
-
-        Fetches a fresh temporary S3 URL each time (URLs expire after ~1h).
-        Skips download if the file already exists locally with the same name.
-
-        Returns the local file path, or None on failure.
-        """
+        """Download a file (fresh S3 URL each time — they expire ~1h);
+        skips if already downloaded. Returns the local path, or None."""
         details = self.get_file_details(file_id)
         if details is None or details.download_url is None:
             log.error(f'Could not get download URL for {file_id}')
@@ -216,24 +166,8 @@ class FuturisedClient:
         camera_filter: str = 'Wide',
         extensions: Set[str] = frozenset({'.JPG', '.JPEG', '.TIFF', '.TIF'}),
     ) -> List[Path]:
-        """Check for new image files and download them.
-
-        Filters by camera type and file extension. Skips files already
-        downloaded in this session.
-
-        Parameters
-        ----------
-        camera_filter : str
-            Only download files from this camera (e.g. ``'Wide'``).
-            Use ``''`` or ``None`` to accept all cameras.
-        extensions : set of str
-            Allowed file extensions (uppercase, with dot).
-
-        Returns
-        -------
-        list of Path
-            Local paths of newly downloaded images.
-        """
+        """Download new files matching camera_filter/extensions (skips ones
+        already seen this session); returns their local paths."""
         all_files = self.list_media()
 
         candidates = [
@@ -259,24 +193,7 @@ class FuturisedClient:
     # ── Telemetry API ───────────────────────────────────────────
 
     def get_telemetry(self, count: int = 1) -> Optional[List[dict]]:
-        """Fetch recent telemetry records from the getDJIData endpoint.
-
-        Parameters
-        ----------
-        count : int
-            Number of recent records to retrieve. Use ``1`` for latest only.
-
-        Returns
-        -------
-        list of dicts (raw JSON), or None on error.
-
-        Notes
-        -----
-        The telemetry API uses a different auth token (Bearer) and returns
-        drone state data (position, heading, battery, gimbal target).
-        Coordinate values may use European number formatting (commas as
-        decimal separators, scientific notation).
-        """
+        """Fetch the last `count` telemetry records (1 = latest only)."""
         if self._telem_token is None:
             log.warning('Telemetry token not configured.')
             return None
@@ -288,15 +205,9 @@ class FuturisedClient:
 
     @staticmethod
     def parse_telemetry_coord(value: str) -> Optional[float]:
-        """Best-effort parse of a telemetry coordinate value.
-
-        The getDJIData endpoint returns coordinates in inconsistent formats:
-        European comma-decimal, scientific notation, or plain integers.
-        Some values are scaled by large factors (÷ 10^13 or 10^14).
-
-        This method attempts to normalise the value to degrees. Returns
-        None if the value cannot be interpreted.
-        """
+        """Normalise a getDJIData coordinate to degrees — the endpoint
+        mixes European comma-decimals, scientific notation, and values
+        scaled by 1e13/1e14. Returns None if unparseable."""
         if not value or value == '0':
             return None
 

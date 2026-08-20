@@ -1,20 +1,10 @@
 """
 TRIFFID UGV Perception Node
 
-Pixel-aligned RGB-D perception pipeline:
-
-  RGB and depth come from a single pixel-aligned camera (RealSense).
-  The depth image shares the same resolution and intrinsics as the RGB image, so depth can be sampled
-  directly at each detection's pixel coordinates.
-
-  1. Subscribe to RGB + aligned Depth + shared CameraInfo + TF
-  2. Run YOLO on the RGB image → 2D bounding boxes + instance masks
-  3. For each detection, sample depth at mask/bbox pixels
-  4. Back-project sampled pixels → 3D points in camera_optical_frame
-  5. Median position + extent estimation
-  6. Transform camera_optical_frame → b2/base_link via TF2
-  7. Assign persistent tracking ID (IoU tracker on RGB bboxes)
-  8. Publish vision_msgs/Detection3DArray in b2/base_link
+Pixel-aligned RGB-D pipeline: RGB and depth share resolution/intrinsics
+(RealSense), so depth is sampled directly at each detection's pixels.
+YOLO on RGB -> sample+back-project depth -> median 3D position ->
+TF to b2/base_link -> IoU track -> publish Detection3DArray.
 """
 
 import rclpy
@@ -469,11 +459,7 @@ class UGVPerceptionNode(Node):
     # ─── YOLO detection ────────────────────────────────────────────
 
     def _detect(self, cv_image):
-        """Run YOLO-seg on a BGR image.
-
-        Returns list of detection dicts, each containing:
-          bbox, class_id, class_name, confidence, mask (H×W bool ndarray or None)
-        """
+        """Run YOLO-seg, return dicts with bbox/class_id/class_name/confidence/mask."""
         if self.model is None:
             return []
 
@@ -527,13 +513,8 @@ class UGVPerceptionNode(Node):
     # ─── Segmentation label-map publisher ──────────────────────────
 
     def _publish_segmentation(self, cv_image, detections, header):
-        """Publish a semantic segmentation label image (mono8).
-
-        Each pixel value is the 1-based YOLO class ID of the detection
-        that covers it (0 = background).  With 63 classes this fits
-        comfortably in uint8.  When masks overlap, the higher-confidence
-        detection wins.
-        """
+        """Publish a mono8 label map (pixel = 1-based class id, 0 = background);
+        overlapping masks resolve to the higher-confidence detection."""
         if self.pub_seg.get_subscription_count() == 0:
             return  # no subscribers, skip
 
@@ -604,16 +585,9 @@ class UGVPerceptionNode(Node):
         depth_scale_y=1.0,
         rgb_shape=None,
     ):
-        """Sample depth at detection pixels and back-project to 3D.
-
-        For a pixel-aligned RGB-D camera the depth image shares the
-        same pixel grid and intrinsics as the RGB image, so we sample
-        depth directly at the detection's mask (or bbox) pixels.
-
-        Returns:
-            np.ndarray (M, 3) in camera_optical_frame
-            (X=right, Y=down, Z=forward), or None.
-        """
+        """Sample depth at the detection's mask/bbox pixels and back-project
+        to camera_optical_frame (X right, Y down, Z forward). Returns
+        (M, 3) or None; RGB/depth share pixel grid on this camera."""
         depth_h, depth_w = depth_img.shape[:2]
         if rgb_shape is None:
             rgb_h, rgb_w = depth_h, depth_w
@@ -681,13 +655,8 @@ class UGVPerceptionNode(Node):
         return np.column_stack([X, Y, Z])
 
     def _transform_points_batch(self, points, source_frame, target_frame, stamp):
-        """Transform an (N,3) array of 3D points between frames using TF2.
-
-        Looks up the transform once and applies it as a matrix multiply
-        for efficiency (instead of N individual TF calls).
-
-        Returns np.ndarray (N, 3) in the target frame, or None on failure.
-        """
+        """Transform (N,3) points via one TF lookup + matrix multiply
+        (instead of N individual TF calls). None on failure."""
         try:
             tf_stamped = self.tf_buffer.lookup_transform(
                 target_frame, source_frame, rclpy.time.Time(),
@@ -712,10 +681,7 @@ class UGVPerceptionNode(Node):
         return pts_out
 
     def _transform_point(self, point_cam, source_frame, target_frame, stamp):
-        """Transform a single 3D point between frames using TF2.
-        Returns (x, y, z) in target frame, or None on failure (consistent
-        with _transform_points_batch — callers must skip the detection).
-        """
+        """Transform a single 3D point via TF2; None on failure."""
         pose_msg = PoseStamped()
         pose_msg.header.stamp = stamp
         pose_msg.header.frame_id = source_frame
@@ -742,13 +708,7 @@ class UGVPerceptionNode(Node):
             return None
 
     def _bbox_to_3d_corners(self, u1, v1, u2, v2, depth, fx, fy, cx, cy):
-        """Back-project 2D bbox corners to 3D at a given depth.
-
-        Uses camera_optical_frame convention (X right, Y down, Z forward).
-        ``depth`` is the Z component (forward distance from the camera).
-
-        Returns np.ndarray (8, 3) – axis-aligned bounding box corners.
-        """
+        """Back-project a 2D bbox to 8 3D corners at a fixed depth (Z)."""
         x_left  = (u1 - cx) * depth / fx
         x_right = (u2 - cx) * depth / fx
         y_top   = (v1 - cy) * depth / fy
@@ -773,14 +733,9 @@ class UGVPerceptionNode(Node):
 
     @staticmethod
     def _nms_3d(detections, dist_thresh=0.5):
-        """Suppress duplicate 3-D detections at (nearly) identical positions.
-
-        When several YOLO predictions overlap the same region (e.g.
-        "Destroyed building" and "Building"), they match the same sparse
-        depth points and produce identical 3-D positions.  This function
-        keeps only the highest-confidence detection within *dist_thresh*
-        metres (Euclidean in base_link).
-        """
+        """Keep the highest-confidence detection within dist_thresh metres —
+        overlapping classes (e.g. Building/Destroyed building) can land on
+        the same depth points and produce near-identical positions."""
         if len(detections) <= 1:
             return detections
 

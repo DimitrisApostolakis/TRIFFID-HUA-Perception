@@ -1,20 +1,8 @@
-"""TELESTO Map Manager API client.
+"""TELESTO Map Manager API client (stdlib only, no `requests`).
 
-Provides ``TelestoClient`` for CRUD operations on GeoJSON features hosted
-at the TELESTO backend (WordPress/map-manager REST API).
-
-Endpoints
----------
-- GET    /features           → FeatureCollection
-- PUT    /features           → create a new Feature (returns with server ID)
-- PATCH  /features/{id}      → update an existing Feature
-- DELETE /features/{id}      → remove a Feature
-
-Observer (sync status):
-- GET    /observer-sync/v1/status
-- PATCH  /observer-sync/v1/status
-
-Uses stdlib only (no ``requests`` dependency).
+CRUD on GeoJSON features: GET /features, PUT /features (create), PATCH
+/features/{id} (update), DELETE /features/{id}. Plus an observer-sync
+status endpoint (GET/PATCH /observer-sync/v1/status).
 """
 
 from __future__ import annotations
@@ -68,9 +56,7 @@ _TIMEOUT = 15  # seconds
 
 
 def _make_ssl_ctx() -> ssl.SSLContext:
-    """Create a default SSL context for HTTPS requests."""
-    ctx = ssl.create_default_context()
-    return ctx
+    return ssl.create_default_context()
 
 
 def _request(
@@ -80,10 +66,7 @@ def _request(
     headers: Optional[dict] = None,
     timeout: int = _TIMEOUT,
 ) -> dict:
-    """Execute an HTTP request and return parsed JSON response.
-
-    Raises ``TelestoError`` on HTTP errors or JSON parse failures.
-    """
+    """HTTP request -> parsed JSON. Raises TelestoError on failure."""
     hdrs = {'Content-Type': 'application/json', 'Accept': 'application/json'}
     if headers:
         hdrs.update(headers)
@@ -120,17 +103,7 @@ class TelestoError(Exception):
 
 
 class TelestoClient:
-    """Client for the TELESTO Map Manager REST API.
-
-    Parameters
-    ----------
-    base_url : str
-        Map Manager endpoint (default: ``https://crispres.com/wp-json/map-manager/v1``).
-    observer_url : str
-        Observer Sync endpoint (default: ``https://crispres.com/wp-json/observer-sync/v1``).
-    timeout : int
-        HTTP request timeout in seconds.
-    """
+    """Client for the TELESTO Map Manager REST API."""
 
     def __init__(
         self,
@@ -154,18 +127,7 @@ class TelestoClient:
         )
 
     def put_feature(self, feature: dict) -> dict:
-        """PUT (create) a single feature.
-
-        Parameters
-        ----------
-        feature : dict
-            A GeoJSON Feature dict (must have ``geometry`` and ``properties``).
-
-        Returns
-        -------
-        dict
-            The created Feature as returned by the server (includes server ``id``).
-        """
+        """PUT (create) a single feature; returns it with the server-assigned id."""
         payload = {
             'geometry': feature['geometry'],
             'properties': feature.get('properties', {}),
@@ -178,15 +140,7 @@ class TelestoClient:
         )
 
     def patch_feature(self, feature_id: str, feature: dict) -> dict:
-        """PATCH (update) an existing feature by its server-assigned ID.
-
-        Parameters
-        ----------
-        feature_id : str
-            The TELESTO feature ID (e.g. ``feature_6994dac99fc5a3.42572521``).
-        feature : dict
-            Updated geometry/properties.
-        """
+        """PATCH an existing feature (by server-assigned id) with new geometry/properties."""
         payload = {
             'geometry': feature['geometry'],
             'properties': feature.get('properties', {}),
@@ -209,13 +163,7 @@ class TelestoClient:
     # Bulk operations
 
     def upload_collection(self, collection: dict) -> List[dict]:
-        """Upload every feature in a FeatureCollection via PUT.
-
-        Returns
-        -------
-        list[dict]
-            List of server responses for each created feature.
-        """
+        """PUT every feature in a FeatureCollection; returns server responses."""
         results = []
         for feature in collection.get('features', []):
             try:
@@ -235,26 +183,9 @@ class TelestoClient:
         collection: dict,
         source: Optional[str] = None,
     ) -> dict:
-        """Smart sync: upload features and remove stale remote ones.
-
-        1. GET current remote features
-        2. Filter by ``source`` (if given) to find our previously-uploaded set
-        3. PUT new features / PATCH changed features
-        4. DELETE remote features that are no longer in the local set
-
-        Parameters
-        ----------
-        collection : dict
-            GeoJSON FeatureCollection to sync.
-        source : str, optional
-            Filter remote features by ``properties.source`` (e.g. ``"ugv"``).
-            If None, uses the source from the first feature in the collection.
-
-        Returns
-        -------
-        dict
-            Summary: ``{"created": N, "updated": N, "deleted": N, "errors": N}``.
-        """
+        """Sync collection to match the remote exactly: PUT new/changed
+        features, DELETE remote ones (filtered by source) no longer
+        present locally. Returns {created, updated, deleted, errors}."""
         stats = {'created': 0, 'updated': 0, 'deleted': 0, 'errors': 0}
         local_features = collection.get('features', [])
 
@@ -322,19 +253,9 @@ class TelestoClient:
         collection: dict,
         radius_m: float = 10.0,
     ) -> dict:
-        """Upgrade-or-insert sync: never delete remote features.
-
-        For each local feature:
-        - ``local_frame=True``: always PUT (body-frame coords, no geo-compare)
-        - No nearby remote within *radius_m* metres: PUT (new discovery)
-        - Nearby remote with lower confidence: PATCH (better reading)
-        - Nearby remote with same/higher confidence: skip
-
-        Returns
-        -------
-        dict
-            Summary: ``{"created": N, "updated": N, "skipped": N, "errors": N}``.
-        """
+        """Upsert only, never delete: PUT local_frame features and ones with
+        no remote within radius_m; PATCH a nearby remote if we're more
+        confident, else skip. Returns {created, updated, skipped, errors}."""
         stats: Dict[str, int] = {
             'created': 0, 'updated': 0, 'skipped': 0, 'errors': 0,
         }
@@ -410,10 +331,7 @@ class TelestoClient:
         return stats
 
     def clear_source(self, source: str) -> int:
-        """Delete all remote features with the given source.
-
-        Returns the number of successfully deleted features.
-        """
+        """Delete all remote features with the given source; returns count deleted."""
         try:
             remote = self.get_features()
         except TelestoError:
@@ -439,15 +357,7 @@ class TelestoClient:
         )
 
     def notify_observer(self, **kwargs) -> dict:
-        """PATCH observer status to signal data has been updated.
-
-        Common fields: ``fe_updated``, ``mobile_updated``, ``ar_updated``
-        (set to 1 to notify, 0 to clear).
-
-        Example::
-
-            client.notify_observer(fe_updated=1)
-        """
+        """PATCH observer status, e.g. notify_observer(fe_updated=1)."""
         return _request(
             f'{self.observer_url}/status',
             method='PATCH',

@@ -1,30 +1,13 @@
 """
 TRIFFID GeoJSON Bridge
 
-Subscribes to UGV detection topic (Detection3DArray in b2/base_link)
-and converts them to RFC-7946 GeoJSON, then:
-  1. Publishes as a ROS2 String topic (for debugging / other nodes)
-  2. Periodically (every ``publish_period_s``) flushes the accumulated,
-     deduplicated feature set — independently controllable:
-     ``save_to_disk`` (default true) writes an atomic GeoJSON snapshot to
-     ``output_dir``/ugv_detections.geojson; ``publish_to_api`` (default
-     false) PUTs one feature per request to the TRIFFID mapping API.
-     Both may be enabled at once.
+Converts UGV Detection3DArray (b2/base_link) to RFC-7946 GeoJSON: publishes
+per-frame on a ROS topic, and periodically flushes the accumulated set to
+disk and/or the TELESTO Map Manager API (save_to_disk / publish_to_api).
 
-Coordinate handling:
-  - Detections arrive in ``b2/base_link`` (X=forward, Y=left, Z=up).
-  - The robot's current GPS position is tracked from ``/fix``
-    (median-filtered over a sliding window to reduce noise).
-  - The robot's heading (yaw) is obtained from ``/dog_odom``
-    orientation quaternion (Go2 state estimator, magnetometer-fused).
-  - Body-frame detection offsets are rotated by the robot's yaw into
-    East-North-Up (ENU) and added to the current GPS position.
-  - When no GPS is available, raw local (x, y, z) are emitted and a
-    ``"local_frame": true`` property is added.
-  - 2D coordinates are emitted: [lon, lat] (RFC 7946 §3.1.1).
-   - WGS-84 ellipsoidal altitude is stored in ``altitude_m``.
-
-API endpoint (when enabled): https://crispres.com/wp-json/map-manager/v1/features
+Body-frame detections are rotated by robot heading (/dog_odom) into ENU
+and added to the current GPS fix (/fix, median-filtered). Without GPS,
+raw local (x, y, z) is emitted with "local_frame": true.
 """
 
 import collections
@@ -52,16 +35,10 @@ _R_EARTH = 6378137.0
 # GPS sliding-window size for median filter
 _GPS_WINDOW = 7
 
-# Minimum polygon extent (metres) — used when one bbox dimension is 0 so that a visible polygon is still emitted instead of a point 
+# Minimum polygon extent (m) so a zero-size bbox still emits a visible shape.
 _MIN_EXTENT = 0.3
 
-# Per-class geometry types from the TRIFFID 63-class disaster-response
-# ontology.  See geojson_geometries.txt for the authoritative mapping.
-#
-#   Point      – small / mobile objects (persons, equipment, vehicles)
-#   LineString – linear structures (fences, walls)
-#   Polygon    – everything else (areas, buildings, vegetation, …)
-
+# Point = small/mobile objects, LineString = fences/walls, else Polygon.
 _POINT_CLASSES = frozenset([
     'helmet', 'first responder', 'destroyed vehicle', 'fire hose',
     'scba', 'boot', 'mask', 'window', 'citizen', 'pole', 'animal',
@@ -111,13 +88,8 @@ def _feature_centroid(feature: dict):
 
 
 def _deduplicate_features(features: list, radius_m: float) -> list:
-    """Remove duplicate features: same class + overlapping location.
-
-    Within each class group, if two features have centroids within
-    *radius_m* metres of each other, only the higher-confidence one is
-    kept.  Features with no GPS coordinates (local_frame) are passed
-    through unchanged.
-    """
+    """Keep the highest-confidence feature per class within radius_m of
+    each other; local_frame features (no GPS) pass through unchanged."""
     if len(features) <= 1:
         return features
 
@@ -157,13 +129,9 @@ def _deduplicate_features(features: list, radius_m: float) -> list:
 
 
 def _merge_features(accumulated: list, new: list, radius_m: float) -> list:
-    """Merge new features into the accumulated set with spatial dedup.
-
-    Growth is bounded: GPS features collapse to the single highest-
-    confidence one within *radius_m* (per class), and local-frame features
-    — which bypass the spatial dedup because they have no GPS coordinates —
-    collapse to the newest one per (class, track id).
-    """
+    """Merge new features into the accumulated set, deduplicated. GPS
+    features collapse to the best within radius_m; local-frame features
+    (no GPS) collapse to the newest per (class, track id)."""
     latest_local = {}
     gps_feats = []
     for feat in accumulated + new:
@@ -177,10 +145,7 @@ def _merge_features(accumulated: list, new: list, radius_m: float) -> list:
 
 
 def _atomic_write_geojson(path, collection: dict) -> None:
-    """Write a GeoJSON snapshot atomically (tmp file + os.replace).
-
-    Readers never see a half-written file, even if they poll mid-write.
-    """
+    """Write a GeoJSON snapshot atomically (tmp file + os.replace)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + '.tmp')
@@ -189,7 +154,7 @@ def _atomic_write_geojson(path, collection: dict) -> None:
 
 
 class GeoJSONBridge(Node):
-    """Convert ROS2 detections to GeoJSON and push to TRIFFID API."""
+    """Convert ROS2 detections to GeoJSON and push to TELESTO."""
 
     def __init__(self):
         super().__init__('geojson_bridge')
@@ -234,9 +199,6 @@ class GeoJSONBridge(Node):
             self.robot_alt = param_alt
             self.gps_valid = True
 
-        # Heading state 
-        # Yaw from /dog_odom quaternion (radians, ENU convention:
-        # 0 = East, π/2 = North, counter-clockwise positive)
         self.robot_yaw = 0.0
         self.heading_valid = False
 
@@ -295,12 +257,8 @@ class GeoJSONBridge(Node):
         # Spatial deduplication radius (metres)
         self._dedup_radius_m = float(self.get_parameter('dedup_radius_m').value)
 
-        # ── Periodic flush (disk snapshot / API upload) ─────────────
-        # Features accumulate across frames (spatially deduplicated) and
-        # are flushed every publish_period_s. API uploads run on a single
-        # long-lived worker so a slow backend can never pile up threads;
-        # the depth-1 queue drops the older snapshot when the worker lags
-        # (each snapshot supersedes the previous one anyway).
+        # API uploads run on one worker thread; depth-1 queue drops a
+        # stale pending snapshot instead of piling up threads.
         self._accumulated = []
         self._uploaded_local_ids = set()   # local-frame features PUT once
         self._api_queue = queue.Queue(maxsize=1)
@@ -314,11 +272,7 @@ class GeoJSONBridge(Node):
 
     #  GPS (position tracking with median filter)
     def gps_callback(self, msg: NavSatFix):
-        """Update current robot position from every valid GPS fix.
-
-        Uses a sliding-window median filter to suppress GPS noise
-        (typical consumer GPS jitter is ±2-5 m).
-        """
+        """Update robot position; median-filtered over a sliding window."""
         if msg.latitude == 0.0 and msg.longitude == 0.0:
             return
 
@@ -341,12 +295,7 @@ class GeoJSONBridge(Node):
 
     #  Heading (from /dog_odom orientation quaternion)
     def odom_callback(self, msg: Odometry):
-        """Extract yaw from the Go2 state estimator odometry.
-
-        The orientation quaternion from /dog_odom is expected to be in
-        an ENU-aligned frame (magnetometer-fused on the Unitree Go2).
-        Yaw = angle from East axis, counter-clockwise positive.
-        """
+        """Extract ENU yaw (from East, CCW+) from the Go2's odometry quaternion."""
         q = msg.pose.pose.orientation
         siny = 2.0 * (q.w * q.z + q.x * q.y)
         cosy = 1.0 - 2.0 * (q.y ** 2 + q.z ** 2)
@@ -362,19 +311,7 @@ class GeoJSONBridge(Node):
     #  Coordinate conversion (body-frame → GPS)
     @staticmethod
     def _body_to_enu(x_fwd, y_left, z_up, yaw):
-        """Rotate a body-frame offset into East-North-Up.
-
-        Body frame (b2/base_link): X=forward, Y=left, Z=up.
-        ENU world frame: X=East, Y=North, Z=Up.
-
-        The robot's heading *yaw* is the angle from East (CCW positive)
-        in the ENU frame.
-
-        Robot forward direction in ENU: (cos(yaw), sin(yaw))
-        Robot left direction in ENU:    (-sin(yaw), cos(yaw))
-
-        Returns (east, north, up) in metres.
-        """
+        """Rotate a body-frame (fwd, left, up) offset into ENU metres."""
         cos_y = math.cos(yaw)
         sin_y = math.sin(yaw)
         east  = x_fwd * cos_y - y_left * sin_y
@@ -383,15 +320,8 @@ class GeoJSONBridge(Node):
         return east, north, up
 
     def body_to_gps(self, x_fwd, y_left, z_up=0.0):
-        """Convert a detection in b2/base_link to [lon, lat, alt].
-
-        1. Rotate body offset by robot yaw → ENU metres
-        2. Convert ENU metres → degree offsets (equirectangular)
-        3. Add to current robot GPS position
-
-        Returns (lon, lat, alt) tuple.
-        When GPS not available, returns raw body-frame coords.
-        """
+        """Convert a b2/base_link offset to (lon, lat, alt); raw body-frame
+        coords if GPS isn't available yet."""
         if not self.gps_valid:
             return (x_fwd, y_left, z_up)
 
@@ -412,19 +342,9 @@ class GeoJSONBridge(Node):
 
         return (lon, lat, alt)  # GeoJSON order: [lon, lat, alt]
 
-    # ═══════════════════════════════════════════════════════════════
-    #  Detection → GeoJSON conversion
-    # ═══════════════════════════════════════════════════════════════
-
-    # Class-dependent geometry type
     @staticmethod
     def _geometry_type_for_class(class_name: str) -> str:
-        """Return the GeoJSON geometry type to use for a given class.
-
-        - Person classes → Point (small, mobile targets)
-        - Linear structures (Fence) → LineString
-        - Everything else → Polygon (footprint)
-        """
+        """Point for person classes, LineString for fence/wall, else Polygon."""
         if class_name in _POINT_CLASSES:
             return 'Point'
         if class_name in _LINE_CLASSES:
@@ -433,12 +353,8 @@ class GeoJSONBridge(Node):
 
     def detections_to_geojson(self, detections, source='ugv',
                                detection_type='seg'):
-        """Build a GeoJSON FeatureCollection from detection dicts.
-
-        Geometry coordinates are 2D [lon, lat] only (RFC 7946).
-        WGS-84 ellipsoidal altitude is stored in ``altitude_m``.
-        Geometry type is class-dependent (Point / LineString / Polygon).
-        """
+        """Build a GeoJSON FeatureCollection; altitude goes in altitude_m,
+        coordinates stay 2D [lon, lat] per RFC 7946."""
         features = []
         for det in detections:
             lon, lat, alt = det['coordinates']
@@ -669,21 +585,12 @@ class GeoJSONBridge(Node):
                 return {}
 
     def _send_to_api(self, collection: dict):
-        """Upsert the accumulated features to the TELESTO Map Manager.
-
-        On this API, ``PUT /features`` *creates* a feature (the server
-        assigns a new POI id) — so blindly re-PUTting the accumulated set
-        every flush period would pile up server-side duplicates. Instead,
-        each flush:
-
-          1. GET the current remote features
-          2. PUT features with no same-class remote within the dedup radius
-          3. PATCH the nearby remote when ours has higher confidence
-          4. skip when the nearby remote is already as good
-
-        Local-frame features (no GPS fix yet) cannot be geo-compared
-        against remote features, so they are PUT once per (class, track
-        id) and remembered to avoid re-uploading every period.
+        """Upsert to TELESTO: PUT always creates a new POI, so blindly
+        re-PUTting every flush would duplicate features server-side.
+        Instead: GET remote, PUT if nothing nearby of the same class,
+        PATCH if ours is better, else skip. Local-frame features (no GPS
+        yet) can't be geo-compared, so they PUT once per track and get
+        remembered to avoid repeat uploads.
         """
         features = collection.get('features', [])
         if not features:

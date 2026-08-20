@@ -49,9 +49,10 @@ docker rm -f triffid_uav_perception
 ## Output GeoJSON
 
 Written to `<output>/<video-stem>_detections.geojson` (default: next to the
-input video, the runner always uses `./uav_samples/`). One RFC-7946
-FeatureCollection per video with a top-level `metadata` foreign member
-(permitted by RFC 7946 §6.1) carrying the run parameters.
+input video; the Quick Start commands above use `--output /app/samples`,
+i.e. `./uav_samples/` on the host). One RFC-7946 FeatureCollection per
+video with a top-level `metadata` foreign member carrying the run
+parameters.
 
 **Coordinates are pixels** in the original frame resolution, origin top-left
 (`x` = column, `y` = row) — flagged per feature via
@@ -141,6 +142,9 @@ python -m triffid_uav_perception.uav_node --poll-api [options]   # see below
 | `--classes` | *(all)* | Comma-separated class ids and/or labels |
 | `--output` | *(video dir)* | Output directory for the GeoJSON |
 | `--srt` | *(auto-detect)* | DJI SRT telemetry sidecar (default: `<video-stem>.srt` next to the video) |
+| `--debug-video` | off | Also save `<stem>_debug.mp4` with boxes/points/labels drawn on top |
+| `--debug-video-seconds` | `20.0` | Length of the debug video window |
+| `--debug-video-start` | `0.0` | Start offset of the debug video window |
 | `--post-telesto` | off | Upload the collection to TELESTO after each video |
 | `--telesto-base-url` | env `TELESTO_BASE_URL` / built-in | Backend override |
 | `--poll-api` | off | Poll FUTURISED for new video uploads instead of a local file (PoC — see below) |
@@ -175,9 +179,8 @@ was already processed does not trigger reprocessing.
 
 ## TELESTO Upload (optional)
 
-`--post-telesto` (or `POST_TELESTO=1` with the runner) PUTs every feature to
-the TELESTO Map Manager REST API via `triffid_telesto.telesto_client` after
-each video finishes.
+`--post-telesto` PUTs every feature to the TELESTO Map Manager REST API via
+`triffid_telesto.telesto_client` after each video finishes.
 
 ## Docker Setup
 

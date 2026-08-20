@@ -2,3 +2,4 @@ numpy<2
 opencv-python-headless
 ultralytics
 lapx
+filelock>=3.15
