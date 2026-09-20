@@ -5,8 +5,9 @@ Converts UGV Detection3DArray (b2/base_link) to RFC-7946 GeoJSON: publishes
 per-frame on a ROS topic, and periodically flushes the accumulated set to
 disk and/or the TELESTO Map Manager API (save_to_disk / publish_to_api).
 
-Body-frame detections are rotated by robot heading (/dog_odom) into ENU
-and added to the current GPS fix (/fix, median-filtered). Without GPS,
+Body-frame detections are rotated by robot heading
+(/b2/nicla/magnetometer/heading_broadcasted) into ENU and added to the
+current GPS fix (/fix, median-filtered). Without GPS,
 raw local (x, y, z) is emitted with "local_frame": true.
 """
 
@@ -26,8 +27,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 from vision_msgs.msg import Detection3DArray
 from sensor_msgs.msg import NavSatFix
-from nav_msgs.msg import Odometry
-from std_msgs.msg import String
+from std_msgs.msg import String, Float32
 
 # Earth radius (WGS-84 semi-major axis) in metres
 _R_EARTH = 6378137.0
@@ -215,10 +215,10 @@ class GeoJSONBridge(Node):
             self.gps_callback,
             10,
         )
-        self.sub_odom = self.create_subscription(
-            Odometry,
-            '/dog_odom',
-            self.odom_callback,
+        self.sub_heading = self.create_subscription(
+            Float32,
+            '/b2/nicla/magnetometer/heading_broadcasted',
+            self.heading_callback,
             QoSProfile(
                 history=HistoryPolicy.KEEP_LAST,
                 depth=5,
@@ -293,19 +293,18 @@ class GeoJSONBridge(Node):
             )
 
 
-    #  Heading (from /dog_odom orientation quaternion)
-    def odom_callback(self, msg: Odometry):
-        """Extract ENU yaw (from East, CCW+) from the Go2's odometry quaternion."""
-        q = msg.pose.pose.orientation
-        siny = 2.0 * (q.w * q.z + q.x * q.y)
-        cosy = 1.0 - 2.0 * (q.y ** 2 + q.z ** 2)
-        self.robot_yaw = math.atan2(siny, cosy)
+    #  Heading (magnetic north = 0°, clockwise, [0, 360))
+    def heading_callback(self, msg: Float32):
+        """Convert compass heading to ENU yaw (East = 0, CCW+)."""
+        heading_deg = float(msg.data) % 360.0
+        yaw = math.radians(90.0 - heading_deg)
+        self.robot_yaw = (yaw + math.pi) % (2.0 * math.pi) - math.pi
 
         if not self.heading_valid:
             self.heading_valid = True
             self.get_logger().info(
-                f'Heading acquired: {math.degrees(self.robot_yaw):.1f}° '
-                f'(ENU yaw)'
+                f'Heading acquired: {heading_deg:.1f}° magnetic, '
+                f'{math.degrees(self.robot_yaw):.1f}° ENU yaw'
             )
 
     #  Coordinate conversion (body-frame → GPS)
