@@ -11,7 +11,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 
-from sensor_msgs.msg import Image, CameraInfo
+from sensor_msgs.msg import Image
 from vision_msgs.msg import Detection3DArray, Detection3D, ObjectHypothesisWithPose
 from geometry_msgs.msg import PoseStamped
 
@@ -101,9 +101,15 @@ TARGET_CLASSES = {
 BASE_FRAME = 'b2/base_link'
 
 # Default topic names
-DEFAULT_RGB_TOPIC = '/camera_front/raw_image'
-DEFAULT_DEPTH_TOPIC = '/camera_front/realsense_front/depth/image_rect_raw'
-DEFAULT_CAMERA_INFO_TOPIC = '/camera_front/camera_info'
+DEFAULT_RGB_TOPIC = '/b2/camera_front_435i/realsense_front_435i/color/image_raw_broadcasted'
+DEFAULT_DEPTH_TOPIC = '/b2/camera_front_435i/realsense_front_435i/aligned_depth_to_color/image_raw_broadcasted'
+
+# Fixed RealSense color intrinsics (640x480 aligned RGB-D stream)
+CAMERA_FRAME = 'camera_color_optical_frame'
+CAMERA_FX = 606.883056640625
+CAMERA_FY = 606.7998657226562
+CAMERA_CX = 323.86395263671875
+CAMERA_CY = 244.37435913085938
 
 # Maximum number of depth pixels to sample per detection (for efficiency)
 _MAX_DEPTH_SAMPLES = 500
@@ -129,10 +135,9 @@ class UGVPerceptionNode(Node):
         self.declare_parameter('tracker_pos_gate', 2.0)
         self.declare_parameter('nms_merge_dist_m', 0.5)
         self.declare_parameter('publish_debug_image', True)
-        # Topic names (placeholders — override in launch file when final names known)
+        # Topic names
         self.declare_parameter('rgb_image_topic', DEFAULT_RGB_TOPIC)
         self.declare_parameter('depth_image_topic', DEFAULT_DEPTH_TOPIC)
-        self.declare_parameter('camera_info_topic', DEFAULT_CAMERA_INFO_TOPIC)
 
         self.model_path = self.get_parameter('model_path').value
         self.conf_thresh = self.get_parameter('confidence_threshold').value
@@ -149,7 +154,6 @@ class UGVPerceptionNode(Node):
         self.publish_debug_image = self.get_parameter('publish_debug_image').value
         self.rgb_topic = self.get_parameter('rgb_image_topic').value
         self.depth_topic = self.get_parameter('depth_image_topic').value
-        self.camera_info_topic = self.get_parameter('camera_info_topic').value
 
         # ── YOLO model ──────────────────────────────────────────────
         if _HAS_YOLO:
@@ -165,8 +169,7 @@ class UGVPerceptionNode(Node):
 
         # ── State ───────────────────────────────────────────────────
         self.bridge = CvBridge()
-        self.camera_info = None          # shared CameraInfo (pixel-aligned)
-        self.camera_frame = None         # read from CameraInfo header.frame_id
+        self.camera_frame = CAMERA_FRAME
         self.depth_image = None          # latest depth frame (uint16, mm)
         self.depth_stamp = None
         self.tracker = ByteTracker(
@@ -191,13 +194,6 @@ class UGVPerceptionNode(Node):
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.VOLATILE,
         )
-        reliable_qos = QoSProfile(
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10,
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.VOLATILE,
-        )
-
         # ── Subscribers ─────────────────────────────────────────────
         self.sub_rgb = self.create_subscription(
             Image,
@@ -211,13 +207,6 @@ class UGVPerceptionNode(Node):
             self.depth_callback,
             sensor_qos,
         )
-        self.sub_camera_info = self.create_subscription(
-            CameraInfo,
-            self.camera_info_topic,
-            self.camera_info_callback,
-            reliable_qos,
-        )
-
         # ── Publishers ───────────────────────────────────────────────
         self.pub_det3d = self.create_publisher(
             Detection3DArray,
@@ -238,7 +227,7 @@ class UGVPerceptionNode(Node):
         self.get_logger().info('UGV Perception node started (pixel-aligned RGB-D pipeline).')
         self.get_logger().info(f'  RGB topic:       {self.rgb_topic}')
         self.get_logger().info(f'  Depth topic:     {self.depth_topic}')
-        self.get_logger().info(f'  CameraInfo topic: {self.camera_info_topic}')
+        self.get_logger().info(f'  Camera frame:    {self.camera_frame}')
         self.get_logger().info(f'  Output topic:    /ugv/detections/front/detections_3d  (frame: {self.target_frame})')
         self.get_logger().info(f'  Seg topic:       /ugv/detections/front/segmentation  (mono8 label map)')
         self.get_logger().info(f'  Debug topic:     /ugv/detections/front/debug_image  (RGB+ID overlay)')
@@ -249,15 +238,6 @@ class UGVPerceptionNode(Node):
             self.get_logger().warn('*** DUMMY DETECTION MODE — bypassing YOLO ***')
 
     # ─── Callbacks ──────────────────────────────────────────────────
-
-    def camera_info_callback(self, msg: CameraInfo):
-        """Store shared camera intrinsics (pixel-aligned RGB-D)."""
-        if self.camera_info is None:
-            self.get_logger().info(
-                f'CameraInfo received: {msg.width}x{msg.height}, '
-                f'frame={msg.header.frame_id}')
-        self.camera_info = msg
-        self.camera_frame = msg.header.frame_id
 
     def depth_callback(self, msg: Image):
         """Store latest depth image (16UC1, millimetres)."""
@@ -272,13 +252,7 @@ class UGVPerceptionNode(Node):
     def rgb_callback(self, msg: Image):
         """Main processing trigger – runs on every RGB frame."""
 
-        # Guard: need CameraInfo and a depth image
-        if self.camera_info is None:
-            self.get_logger().warn(
-                f'Waiting for CameraInfo ({self.camera_info_topic})…',
-                throttle_duration_sec=5.0,
-            )
-            return
+        # Guard: need a depth image
         if self.depth_image is None:
             self.get_logger().warn(
                 'Waiting for Depth image…', throttle_duration_sec=5.0,
@@ -322,16 +296,12 @@ class UGVPerceptionNode(Node):
             self._publish_debug_overlay(cv_image, [], msg.header)
             return
 
-        # Camera intrinsics (shared for pixel-aligned RGB-D)
-        fx = self.camera_info.k[0]
-        fy = self.camera_info.k[4]
-        cx = self.camera_info.k[2]
-        cy = self.camera_info.k[5]
-        if fx == 0 or fy == 0:
-            self.get_logger().warn(
-                'CameraInfo has zero focal length', throttle_duration_sec=5.0)
-            return
-
+        # Fixed intrinsics for the 640x480 RealSense color stream.
+        # Depth is already aligned to color, so the same intrinsics apply.
+        fx = CAMERA_FX
+        fy = CAMERA_FY
+        cx = CAMERA_CX
+        cy = CAMERA_CY
         camera_frame = self.camera_frame
 
         # ── Step 2–4: For each detection, sample depth & back-project ─
