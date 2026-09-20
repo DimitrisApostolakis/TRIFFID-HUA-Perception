@@ -11,14 +11,11 @@ def generate_launch_description():
         DeclareLaunchArgument('confidence_threshold', default_value='0.35'),
         DeclareLaunchArgument('target_frame', default_value='b2/base_link'),
 
-        # Configurable topic names (pixel-aligned RGB-D camera) — defaults
-        # match the ugv_node defaults (rosbag-replay topic set)
+        # Configurable topic names (pixel-aligned RGB-D camera)
         DeclareLaunchArgument('rgb_image_topic',
-                              default_value='/camera_front/raw_image'),
+                              default_value='/b2/camera_front_435i/realsense_front_435i/color/image_raw_broadcasted'),
         DeclareLaunchArgument('depth_image_topic',
-                              default_value='/camera_front/realsense_front/depth/image_rect_raw'),
-        DeclareLaunchArgument('camera_info_topic',
-                              default_value='/camera_front/camera_info'),
+                              default_value='/b2/camera_front_435i/realsense_front_435i/aligned_depth_to_color/image_raw_broadcasted'),
         DeclareLaunchArgument('use_dummy_detections', default_value='false'),
 
         # GeoJSON bridge arguments
@@ -39,7 +36,6 @@ def generate_launch_description():
                 'target_frame': LaunchConfiguration('target_frame'),
                 'rgb_image_topic': LaunchConfiguration('rgb_image_topic'),
                 'depth_image_topic': LaunchConfiguration('depth_image_topic'),
-                'camera_info_topic': LaunchConfiguration('camera_info_topic'),
                 'use_dummy_detections': LaunchConfiguration('use_dummy_detections'),
             }],
         ),
