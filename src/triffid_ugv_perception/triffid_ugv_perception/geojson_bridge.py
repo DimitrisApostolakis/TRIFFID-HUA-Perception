@@ -199,7 +199,7 @@ class GeoJSONBridge(Node):
             self.robot_alt = param_alt
             self.gps_valid = True
 
-        self.robot_yaw = 0.0
+        self.robot_heading = 0.0
         self.heading_valid = False
 
         # Subscribers 
@@ -295,27 +295,32 @@ class GeoJSONBridge(Node):
 
     #  Heading (magnetic north = 0°, clockwise, [0, 360))
     def heading_callback(self, msg: Float32):
-        """Convert compass heading to ENU yaw (East = 0, CCW+)."""
+        """Normalize compass heading to [-pi, pi), keeping clockwise-positive."""
         heading_deg = float(msg.data) % 360.0
-        yaw = math.radians(90.0 - heading_deg)
-        self.robot_yaw = (yaw + math.pi) % (2.0 * math.pi) - math.pi
+        heading = math.radians(heading_deg)
+        self.robot_heading = (heading + math.pi) % (2.0 * math.pi) - math.pi
 
         if not self.heading_valid:
             self.heading_valid = True
             self.get_logger().info(
                 f'Heading acquired: {heading_deg:.1f}° magnetic, '
-                f'{math.degrees(self.robot_yaw):.1f}° ENU yaw'
+                f'{math.degrees(self.robot_heading):.1f}° normalized'
             )
 
     #  Coordinate conversion (body-frame → GPS)
     @staticmethod
-    def _body_to_enu(x_fwd, y_left, z_up, yaw):
-        """Rotate a body-frame (fwd, left, up) offset into ENU metres."""
-        cos_y = math.cos(yaw)
-        sin_y = math.sin(yaw)
-        east  = x_fwd * cos_y - y_left * sin_y
-        north = x_fwd * sin_y + y_left * cos_y
-        up    = z_up
+    def _body_to_enu(x_fwd, y_left, z_up, heading):
+        """Convert body-frame (fwd, left, up) offset to ENU metres."""
+        angle_relative = math.atan2(-y_left, x_fwd)
+        angle_absolute = heading + angle_relative
+        angle_absolute = (
+            (angle_absolute + math.pi) % (2.0 * math.pi)
+        ) - math.pi
+
+        distance = math.hypot(x_fwd, y_left)
+        east = distance * math.sin(angle_absolute)
+        north = distance * math.cos(angle_absolute)
+        up = z_up
         return east, north, up
 
     def body_to_gps(self, x_fwd, y_left, z_up=0.0):
@@ -324,10 +329,12 @@ class GeoJSONBridge(Node):
         if not self.gps_valid:
             return (x_fwd, y_left, z_up)
 
-        yaw = self.robot_yaw if self.heading_valid else 0.0
+        heading = self.robot_heading if self.heading_valid else 0.0
 
         # Step 1: body → ENU
-        east, north, up = self._body_to_enu(x_fwd, y_left, z_up, yaw)
+        east, north, up = self._body_to_enu(
+            x_fwd, y_left, z_up, heading
+        )
 
         # Step 2: ENU metres → degree offsets
         lat_rad = math.radians(self.robot_lat)
