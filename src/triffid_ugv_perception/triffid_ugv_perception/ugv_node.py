@@ -4,7 +4,7 @@ TRIFFID UGV Perception Node
 Pixel-aligned RGB-D pipeline: RGB and depth share resolution/intrinsics
 (RealSense), so depth is sampled directly at each detection's pixels.
 YOLO on RGB -> sample+back-project depth -> median 3D position ->
-TF to b2/base_link -> IoU track -> publish Detection3DArray.
+camera-optical axes to b2/base_link -> IoU track -> publish Detection3DArray.
 """
 
 import rclpy
@@ -13,14 +13,9 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPo
 
 from sensor_msgs.msg import Image
 from vision_msgs.msg import Detection3DArray, Detection3D, ObjectHypothesisWithPose
-from geometry_msgs.msg import PoseStamped
-
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
-
-from tf2_ros import Buffer, TransformListener
-import tf2_geometry_msgs  # noqa – registers PoseStamped transform
 
 from triffid_ugv_perception.tracker import ByteTracker
 
@@ -181,10 +176,6 @@ class UGVPerceptionNode(Node):
             pos_gate=float(self.tracker_pos_gate),
         )
 
-        # ── TF2 ─────────────────────────────────────────────────────
-        self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
-
         # ── QoS ─────────────────────────────────────────────────────
         # The rosbag records sensor topics as RELIABLE + VOLATILE.
         # We match that exactly so ros2 bag play data flows correctly.
@@ -326,15 +317,10 @@ class UGVPerceptionNode(Node):
             # Median position in camera_optical_frame
             median_pt = np.median(matched_pts, axis=0)  # (3,)
 
-            # ── Step 5: Transform camera_optical_frame → b2/base_link ─
-            pt_base = self._transform_point(
-                tuple(median_pt), camera_frame, self.target_frame,
-                msg.header.stamp,
-            )
-            if pt_base is None:
-                # No valid transform — a camera-frame position labeled as
-                # base_link would poison downstream geo-referencing.
-                continue
+            # ── Step 5: camera optical axes → b2/base_link ──────────
+            # Assumption: the front RealSense is rigidly aligned with the UGV
+            # and its translational offset from base_link is neglected.
+            pt_base = self._camera_to_base(tuple(median_pt))
 
             # ── Compute 3D bbox extent in base_link ─────────────────
             pt_min_cam = np.min(matched_pts, axis=0)
@@ -357,16 +343,10 @@ class UGVPerceptionNode(Node):
                     x1, y1, x2, y2, median_pt[2], fx, fy, cx, cy,
                 )
 
-            corners_base = self._transform_points_batch(
-                corners_cam, camera_frame, self.target_frame,
-                msg.header.stamp,
+            corners_base = self._camera_to_base_batch(corners_cam)
+            extent_base = tuple(
+                float(v) for v in np.ptp(corners_base, axis=0)
             )
-            if corners_base is not None:
-                extent_base = tuple(
-                    float(v) for v in np.ptp(corners_base, axis=0)
-                )
-            else:
-                extent_base = (0.0, 0.0, 0.0)
 
             detections_3d.append({
                 'position': pt_base,
@@ -468,7 +448,7 @@ class UGVPerceptionNode(Node):
 
     def _dummy_detection(self, cv_image):
         """Return a single fake detection at the image centre.
-        Useful for testing the depth/TF/tracking pipeline without YOLO."""
+        Useful for testing the depth/3D/tracking pipeline without YOLO."""
         h, w = cv_image.shape[:2]
         # Full-image bbox so projections from the tilted depth camera
         # (which hits the lower portion of the RGB image) are captured.
@@ -624,58 +604,29 @@ class UGVPerceptionNode(Node):
         Z = z_m
         return np.column_stack([X, Y, Z])
 
-    def _transform_points_batch(self, points, source_frame, target_frame, stamp):
-        """Transform (N,3) points via one TF lookup + matrix multiply
-        (instead of N individual TF calls). None on failure."""
-        try:
-            tf_stamped = self.tf_buffer.lookup_transform(
-                target_frame, source_frame, rclpy.time.Time(),
-                timeout=rclpy.duration.Duration(seconds=0.2),
-            )
-        except Exception as e:
-            self.get_logger().warn(
-                f'TF {source_frame}→{target_frame} lookup failed: {e}',
-                throttle_duration_sec=5.0,
-            )
-            return None
+    @staticmethod
+    def _camera_to_base(point_cam):
+        """Map RealSense optical axes to b2/base_link axes.
 
-        t = tf_stamped.transform.translation
-        q = tf_stamped.transform.rotation
+        camera optical: X=right, Y=down, Z=forward
+        b2/base_link:    X=forward, Y=left, Z=up
+        """
+        x_cam, y_cam, z_cam = point_cam
+        return (
+            float(z_cam),
+            float(-x_cam),
+            float(-y_cam),
+        )
 
-        # Quaternion → 3×3 rotation matrix
-        rot = self._quat_to_matrix(q.x, q.y, q.z, q.w)
-        tvec = np.array([t.x, t.y, t.z])
-
-        # Apply: p_target = R @ p_source + t
-        pts_out = (rot @ points.T).T + tvec
-        return pts_out
-
-    def _transform_point(self, point_cam, source_frame, target_frame, stamp):
-        """Transform a single 3D point via TF2; None on failure."""
-        pose_msg = PoseStamped()
-        pose_msg.header.stamp = stamp
-        pose_msg.header.frame_id = source_frame
-        pose_msg.pose.position.x = float(point_cam[0])
-        pose_msg.pose.position.y = float(point_cam[1])
-        pose_msg.pose.position.z = float(point_cam[2])
-        pose_msg.pose.orientation.w = 1.0
-
-        try:
-            transformed = self.tf_buffer.transform(
-                pose_msg, target_frame,
-                timeout=rclpy.duration.Duration(seconds=0.1),
-            )
-            return (
-                transformed.pose.position.x,
-                transformed.pose.position.y,
-                transformed.pose.position.z,
-            )
-        except Exception as e:
-            self.get_logger().warn(
-                f'TF {source_frame}→{target_frame} failed: {e}',
-                throttle_duration_sec=5.0,
-            )
-            return None
+    @staticmethod
+    def _camera_to_base_batch(points_cam):
+        """Vectorized camera-optical → b2/base_link axis mapping."""
+        points_cam = np.asarray(points_cam)
+        return np.column_stack([
+            points_cam[:, 2],
+            -points_cam[:, 0],
+            -points_cam[:, 1],
+        ])
 
     def _bbox_to_3d_corners(self, u1, v1, u2, v2, depth, fx, fy, cx, cy):
         """Back-project a 2D bbox to 8 3D corners at a fixed depth (Z)."""
@@ -729,21 +680,6 @@ class UGVPerceptionNode(Node):
         msg.header.stamp = stamp
         msg.header.frame_id = self.target_frame
         self.pub_det3d.publish(msg)
-
-    @staticmethod
-    def _quat_to_matrix(qx, qy, qz, qw):
-        """Convert quaternion (x, y, z, w) to a 3×3 rotation matrix."""
-        # Normalise
-        n = np.sqrt(qx*qx + qy*qy + qz*qz + qw*qw)
-        if n == 0:
-            return np.eye(3)
-        qx, qy, qz, qw = qx/n, qy/n, qz/n, qw/n
-
-        return np.array([
-            [1 - 2*(qy*qy + qz*qz),     2*(qx*qy - qz*qw),     2*(qx*qz + qy*qw)],
-            [    2*(qx*qy + qz*qw), 1 - 2*(qx*qx + qz*qz),     2*(qy*qz - qx*qw)],
-            [    2*(qx*qz - qy*qw),     2*(qy*qz + qx*qw), 1 - 2*(qx*qx + qy*qy)],
-        ])
 
 
 def main(args=None):
