@@ -7,7 +7,8 @@ disk and/or the TELESTO Map Manager API (save_to_disk / publish_to_api).
 
 Body-frame detections are rotated by robot heading
 (/b2/nicla/magnetometer/heading_broadcasted) into ENU and added to the
-current GPS fix (/fix, median-filtered). Without GPS,
+current UGV position. Latitude/longitude come from the UGV status API,
+with /fix (median-filtered) as fallback. Without either source,
 raw local (x, y, z) is emitted with "local_frame": true.
 """
 
@@ -162,6 +163,10 @@ class GeoJSONBridge(Node):
         # Parameters 
         self.declare_parameter('api_url',
                                'https://crispres.com/wp-json/map-manager/v1/features')
+        self.declare_parameter(
+            'position_api_url',
+            'https://crispres.com/wp-json/mqtt/v1/latest',
+        )
         self.declare_parameter('publish_to_api', False)
         self.declare_parameter('save_to_disk', True)
         self.declare_parameter('gps_origin_lat', 0.0)
@@ -172,6 +177,7 @@ class GeoJSONBridge(Node):
         self.declare_parameter('output_dir', '/ws/samples')
 
         self.api_url = self.get_parameter('api_url').value
+        self.position_api_url = self.get_parameter('position_api_url').value
         self.publish_to_api = self.get_parameter('publish_to_api').value
         self.save_to_disk = self.get_parameter('save_to_disk').value
         self.publish_period_s = float(self.get_parameter('publish_period_s').value)
@@ -183,21 +189,39 @@ class GeoJSONBridge(Node):
         self._gps_lon_buf = collections.deque(maxlen=_GPS_WINDOW)
         self._gps_alt_buf = collections.deque(maxlen=_GPS_WINDOW)
 
-        # Current filtered robot GPS position (updated every /fix)
+        # Selected robot position. The UGV status API is primary; /fix is
+        # continuously tracked as fallback. gps_origin_* remains a final
+        # optional seed for local testing.
         self.robot_lat = 0.0
         self.robot_lon = 0.0
         self.robot_alt = 0.0
         self.gps_valid = False
+        self._position_source = 'none'
+        self._position_lock = threading.Lock()
+
+        self._api_lat = 0.0
+        self._api_lon = 0.0
+        self._api_position_valid = False
+
+        self._fix_lat = 0.0
+        self._fix_lon = 0.0
+        self._fix_alt = 0.0
+        self._fix_valid = False
 
         # Seed from parameters if provided
         param_lat = self.get_parameter('gps_origin_lat').value
         param_lon = self.get_parameter('gps_origin_lon').value
         param_alt = self.get_parameter('gps_origin_alt').value
-        if param_lat != 0.0 and param_lon != 0.0:
-            self.robot_lat = param_lat
-            self.robot_lon = param_lon
-            self.robot_alt = param_alt
+        self._seed_lat = float(param_lat)
+        self._seed_lon = float(param_lon)
+        self._seed_alt = float(param_alt)
+        self._seed_valid = param_lat != 0.0 and param_lon != 0.0
+        if self._seed_valid:
+            self.robot_lat = self._seed_lat
+            self.robot_lon = self._seed_lon
+            self.robot_alt = self._seed_alt
             self.gps_valid = True
+            self._position_source = 'param'
 
         self.robot_heading = 0.0
         self.heading_valid = False
@@ -250,9 +274,18 @@ class GeoJSONBridge(Node):
             )
         else:
             self.get_logger().warn(
-                'GPS not yet available — emitting local-frame coordinates. '
-                'Waiting for /fix topic.'
+                'UGV position not yet available — emitting local-frame coordinates. '
+                'Waiting for position API or /fix.'
             )
+
+        # Poll the UGV status API on a background thread so network latency
+        # never blocks ROS callbacks. Only latitude/longitude are consumed.
+        self._position_stop = threading.Event()
+        self._position_worker = threading.Thread(
+            target=self._position_api_worker_loop,
+            daemon=True,
+        )
+        self._position_worker.start()
 
         # Spatial deduplication radius (metres)
         self._dedup_radius_m = float(self.get_parameter('dedup_radius_m').value)
@@ -270,9 +303,100 @@ class GeoJSONBridge(Node):
             self._api_worker.start()
         self.create_timer(self.publish_period_s, self._periodic_flush)
 
-    #  GPS (position tracking with median filter)
+    #  Position (UGV status API primary, /fix fallback)
+    def _select_position_locked(self):
+        """Select the highest-priority currently available position source."""
+        if self._api_position_valid:
+            self.robot_lat = self._api_lat
+            self.robot_lon = self._api_lon
+            if self._fix_valid:
+                self.robot_alt = self._fix_alt
+            elif self._seed_valid:
+                self.robot_alt = self._seed_alt
+            else:
+                self.robot_alt = 0.0
+            self.gps_valid = True
+            self._position_source = 'api'
+        elif self._fix_valid:
+            self.robot_lat = self._fix_lat
+            self.robot_lon = self._fix_lon
+            self.robot_alt = self._fix_alt
+            self.gps_valid = True
+            self._position_source = 'fix'
+        elif self._seed_valid:
+            self.robot_lat = self._seed_lat
+            self.robot_lon = self._seed_lon
+            self.robot_alt = self._seed_alt
+            self.gps_valid = True
+            self._position_source = 'param'
+        else:
+            self.gps_valid = False
+            self._position_source = 'none'
+
+    def _position_api_worker_loop(self):
+        """Poll the UGV status API for latitude/longitude only."""
+        while not self._position_stop.is_set():
+            previous_source = None
+            try:
+                req = Request(
+                    self.position_api_url,
+                    method='GET',
+                    headers={'Accept': 'application/json'},
+                )
+                with urlopen(req, timeout=3) as resp:
+                    if resp.status != 200:
+                        raise URLError(f'HTTP {resp.status}')
+                    payload = json.loads(resp.read().decode('utf-8'))
+
+                message = payload.get('message') or {}
+                lat = float(message['latitude'])
+                lon = float(message['longitude'])
+                if (not math.isfinite(lat) or not math.isfinite(lon)
+                        or not -90.0 <= lat <= 90.0
+                        or not -180.0 <= lon <= 180.0
+                        or (lat == 0.0 and lon == 0.0)):
+                    raise ValueError('invalid latitude/longitude')
+
+                with self._position_lock:
+                    previous_source = self._position_source
+                    self._api_lat = lat
+                    self._api_lon = lon
+                    self._api_position_valid = True
+                    self._select_position_locked()
+
+                if previous_source != 'api':
+                    self.get_logger().info(
+                        f'UGV position acquired from API: '
+                        f'({lat:.7f}, {lon:.7f})'
+                    )
+
+            except (URLError, OSError, KeyError, TypeError, ValueError,
+                    json.JSONDecodeError, UnicodeDecodeError) as e:
+                with self._position_lock:
+                    previous_source = self._position_source
+                    self._api_position_valid = False
+                    self._select_position_locked()
+                    current_source = self._position_source
+
+                if previous_source == 'api':
+                    if current_source == 'fix':
+                        self.get_logger().warn(
+                            f'Position API unavailable — falling back to /fix: {e}'
+                        )
+                    elif current_source == 'param':
+                        self.get_logger().warn(
+                            f'Position API unavailable — falling back to '
+                            f'gps_origin_* parameters: {e}'
+                        )
+                    else:
+                        self.get_logger().warn(
+                            f'Position API unavailable and no /fix available: {e}'
+                        )
+
+            self._position_stop.wait(2.0)
+
     def gps_callback(self, msg: NavSatFix):
-        """Update robot position; median-filtered over a sliding window."""
+        """Track /fix as the median-filtered fallback position."""
         if msg.latitude == 0.0 and msg.longitude == 0.0:
             return
 
@@ -280,16 +404,23 @@ class GeoJSONBridge(Node):
         self._gps_lon_buf.append(msg.longitude)
         self._gps_alt_buf.append(msg.altitude)
 
-        # Median of the sliding window
-        self.robot_lat = float(sorted(self._gps_lat_buf)[len(self._gps_lat_buf) // 2])
-        self.robot_lon = float(sorted(self._gps_lon_buf)[len(self._gps_lon_buf) // 2])
-        self.robot_alt = float(sorted(self._gps_alt_buf)[len(self._gps_alt_buf) // 2])
+        fix_lat = float(sorted(self._gps_lat_buf)[len(self._gps_lat_buf) // 2])
+        fix_lon = float(sorted(self._gps_lon_buf)[len(self._gps_lon_buf) // 2])
+        fix_alt = float(sorted(self._gps_alt_buf)[len(self._gps_alt_buf) // 2])
 
-        if not self.gps_valid:
-            self.gps_valid = True
+        with self._position_lock:
+            previous_source = self._position_source
+            self._fix_lat = fix_lat
+            self._fix_lon = fix_lon
+            self._fix_alt = fix_alt
+            self._fix_valid = True
+            self._select_position_locked()
+            current_source = self._position_source
+
+        if current_source == 'fix' and previous_source != 'fix':
             self.get_logger().info(
-                f'GPS acquired: ({self.robot_lat:.7f}, {self.robot_lon:.7f}, '
-                f'{self.robot_alt:.1f}m)'
+                f'Using /fix fallback: ({fix_lat:.7f}, {fix_lon:.7f}, '
+                f'{fix_alt:.1f}m)'
             )
 
 
@@ -325,8 +456,14 @@ class GeoJSONBridge(Node):
 
     def body_to_gps(self, x_fwd, y_left, z_up=0.0):
         """Convert a b2/base_link offset to (lon, lat, alt); raw body-frame
-        coords if GPS isn't available yet."""
-        if not self.gps_valid:
+        coords if no global UGV position is available."""
+        with self._position_lock:
+            gps_valid = self.gps_valid
+            robot_lat = self.robot_lat
+            robot_lon = self.robot_lon
+            robot_alt = self.robot_alt
+
+        if not gps_valid:
             return (x_fwd, y_left, z_up)
 
         heading = self.robot_heading if self.heading_valid else 0.0
@@ -337,14 +474,14 @@ class GeoJSONBridge(Node):
         )
 
         # Step 2: ENU metres → degree offsets
-        lat_rad = math.radians(self.robot_lat)
+        lat_rad = math.radians(robot_lat)
         d_lat = north / _R_EARTH * (180.0 / math.pi)
         d_lon = east / (_R_EARTH * math.cos(lat_rad)) * (180.0 / math.pi)
 
         # Step 3: add to current robot position
-        lat = self.robot_lat + d_lat
-        lon = self.robot_lon + d_lon
-        alt = self.robot_alt + up
+        lat = robot_lat + d_lat
+        lon = robot_lon + d_lon
+        alt = robot_alt + up
 
         return (lon, lat, alt)  # GeoJSON order: [lon, lat, alt]
 
@@ -494,7 +631,8 @@ class GeoJSONBridge(Node):
 
         if not self.gps_valid:
             self.get_logger().warn(
-                'No GPS fix — publishing with local_frame=true (body-frame coords).',
+                'No UGV global position — publishing with local_frame=true '
+                '(body-frame coords).',
                 throttle_duration_sec=5.0,
             )
 
@@ -843,6 +981,7 @@ def main(args=None):
         pass
     finally:
         if node is not None:
+            node._position_stop.set()
             if node._api_worker is not None:
                 # Best-effort worker stop: clear any queued snapshot and
                 # deliver the shutdown sentinel (worker is a daemon, so a
