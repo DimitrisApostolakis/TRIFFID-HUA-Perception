@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
 
-# Source ROS2 Humble
-source /opt/ros/humble/setup.bash
+# Source ROS2 Jazzy
+source /opt/ros/jazzy/setup.bash
 
 # Build workspace if not built yet
 if [ ! -d "/ws/install" ]; then

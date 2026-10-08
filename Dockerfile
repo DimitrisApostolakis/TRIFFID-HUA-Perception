@@ -1,4 +1,4 @@
-FROM ros:humble-perception-jammy
+FROM ros:jazzy-perception-noble
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV ROS_DOMAIN_ID=42
@@ -7,16 +7,16 @@ ENV ROS_DOMAIN_ID=42
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     python3-opencv \
-    ros-humble-cv-bridge \
-    ros-humble-vision-msgs \
-    ros-humble-tf2-ros \
-    ros-humble-tf2-geometry-msgs \
-    ros-humble-image-transport \
+    ros-jazzy-cv-bridge \
+    ros-jazzy-vision-msgs \
+    ros-jazzy-tf2-ros \
+    ros-jazzy-tf2-geometry-msgs \
+    ros-jazzy-image-transport \
     && rm -rf /var/lib/apt/lists/*
 
 # Python deps
-# Pin numpy<2 because ROS2 Humble cv_bridge was compiled against NumPy 1.x.
-RUN pip3 install --no-cache-dir \
+# Pin numpy<2 because ROS2 Jazzy cv_bridge was compiled against NumPy 1.x.
+RUN pip3 install --no-cache-dir --break-system-packages \
     "numpy<2" \
     "packaging>=22" \
     opencv-python-headless \
@@ -32,7 +32,7 @@ WORKDIR /ws
 # BASH_ENV is sourced by every non-interactive bash invocation.
 ENV BASH_ENV=/etc/triffid_ros_env.sh
 RUN echo '#!/bin/bash'                                          >  /etc/triffid_ros_env.sh && \
-    echo 'source /opt/ros/humble/setup.bash'                    >> /etc/triffid_ros_env.sh && \
+    echo 'source /opt/ros/jazzy/setup.bash'                    >> /etc/triffid_ros_env.sh && \
     echo '[ -f /ws/install/setup.bash ] && source /ws/install/setup.bash' >> /etc/triffid_ros_env.sh && \
     chmod +x /etc/triffid_ros_env.sh
 

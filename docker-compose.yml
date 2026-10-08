@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: triffid_perception:latest
+    image: triffid_perception:jazzy
     container_name: triffid_perception
 
     deploy:
