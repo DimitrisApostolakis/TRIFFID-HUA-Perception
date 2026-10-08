@@ -9,6 +9,7 @@ uav_data/
 # Runtime output directories (GeoJSON snapshots / detection runs)
 samples/
 uav_samples/
+detection_frames/*.png
 
 # ROS2 colcon build artifacts
 build/

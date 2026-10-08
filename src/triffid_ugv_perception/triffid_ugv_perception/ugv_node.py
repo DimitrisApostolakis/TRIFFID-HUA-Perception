@@ -7,6 +7,8 @@ YOLO on RGB -> sample+back-project depth -> median 3D position ->
 camera-optical axes to b2/base_link -> IoU track -> publish Detection3DArray.
 """
 
+import os
+
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
@@ -130,6 +132,9 @@ class UGVPerceptionNode(Node):
         self.declare_parameter('tracker_pos_gate', 2.0)
         self.declare_parameter('nms_merge_dist_m', 0.5)
         self.declare_parameter('publish_debug_image', True)
+        self.declare_parameter('save_debug_frames', True)
+        self.declare_parameter('debug_frames_dir', '/ws/detection_frames')
+        self.declare_parameter('debug_frame_period_s', 1.0)
         # Topic names
         self.declare_parameter('rgb_image_topic', DEFAULT_RGB_TOPIC)
         self.declare_parameter('depth_image_topic', DEFAULT_DEPTH_TOPIC)
@@ -147,6 +152,9 @@ class UGVPerceptionNode(Node):
         self.tracker_pos_gate = self.get_parameter('tracker_pos_gate').value
         self.nms_merge_dist_m = self.get_parameter('nms_merge_dist_m').value
         self.publish_debug_image = self.get_parameter('publish_debug_image').value
+        self.save_debug_frames = self.get_parameter('save_debug_frames').value
+        self.debug_frames_dir = self.get_parameter('debug_frames_dir').value
+        self.debug_frame_period_s = self.get_parameter('debug_frame_period_s').value
         self.rgb_topic = self.get_parameter('rgb_image_topic').value
         self.depth_topic = self.get_parameter('depth_image_topic').value
 
@@ -164,6 +172,15 @@ class UGVPerceptionNode(Node):
 
         # ── State ───────────────────────────────────────────────────
         self.bridge = CvBridge()
+        self._last_debug_save_stamp = None
+        if self.save_debug_frames:
+            try:
+                os.makedirs(self.debug_frames_dir, exist_ok=True)
+            except OSError as e:
+                self.get_logger().error(
+                    f'Cannot create debug frame directory {self.debug_frames_dir}: {e}'
+                )
+                self.save_debug_frames = False
         self.camera_frame = CAMERA_FRAME
         self.depth_image = None          # latest depth frame (uint16, mm)
         self.depth_stamp = None
@@ -222,6 +239,11 @@ class UGVPerceptionNode(Node):
         self.get_logger().info(f'  Output topic:    /ugv/detections/front/detections_3d  (frame: {self.target_frame})')
         self.get_logger().info(f'  Seg topic:       /ugv/detections/front/segmentation  (mono8 label map)')
         self.get_logger().info(f'  Debug topic:     /ugv/detections/front/debug_image  (RGB+ID overlay)')
+        if self.save_debug_frames:
+            self.get_logger().info(
+                f'  Debug frames:    {self.debug_frames_dir} '
+                f'(detection frames, min period {float(self.debug_frame_period_s):.2f}s)'
+            )
         self.get_logger().info(
             f'  Tracker: IoU={self.tracker_iou:.2f}, max_age={int(self.tracker_max_age)}'
         )
@@ -486,10 +508,8 @@ class UGVPerceptionNode(Node):
         self.pub_seg.publish(seg_msg)
 
     def _publish_debug_overlay(self, cv_image, tracked, header):
-        """Publish RGB debug image with bbox + class + track ID overlay."""
-        if not self.publish_debug_image:
-            return
-        if self.pub_debug.get_subscription_count() == 0:
+        """Publish and optionally save RGB debug image with detection overlay."""
+        if not self.publish_debug_image and not self.save_debug_frames:
             return
 
         dbg = cv_image.copy()
@@ -517,9 +537,34 @@ class UGVPerceptionNode(Node):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2, cv2.LINE_AA,
             )
 
-        msg = self.bridge.cv2_to_imgmsg(dbg, encoding='bgr8')
-        msg.header = header
-        self.pub_debug.publish(msg)
+        # Persist only frames that contain at least one tracked detection.
+        if self.save_debug_frames and tracked:
+            stamp_s = float(header.stamp.sec) + float(header.stamp.nanosec) * 1e-9
+            period_s = max(0.0, float(self.debug_frame_period_s))
+            should_save = (
+                self._last_debug_save_stamp is None
+                or period_s == 0.0
+                or stamp_s < self._last_debug_save_stamp
+                or (stamp_s - self._last_debug_save_stamp) >= period_s
+            )
+            if should_save:
+                filename = (
+                    f'detection_{header.stamp.sec}_'
+                    f'{header.stamp.nanosec:09d}.png'
+                )
+                path = os.path.join(self.debug_frames_dir, filename)
+                if cv2.imwrite(path, dbg):
+                    self._last_debug_save_stamp = stamp_s
+                else:
+                    self.get_logger().warn(
+                        f'Failed to save debug detection frame: {path}',
+                        throttle_duration_sec=5.0,
+                    )
+
+        if self.publish_debug_image and self.pub_debug.get_subscription_count() > 0:
+            msg = self.bridge.cv2_to_imgmsg(dbg, encoding='bgr8')
+            msg.header = header
+            self.pub_debug.publish(msg)
 
     # ─── Cross-camera depth → RGB-frame geometry ───────────────────
 

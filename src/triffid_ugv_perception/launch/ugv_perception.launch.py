@@ -17,6 +17,9 @@ def generate_launch_description():
         DeclareLaunchArgument('depth_image_topic',
                               default_value='/b2/camera_front_435i/realsense_front_435i/aligned_depth_to_color/image_raw_broadcasted'),
         DeclareLaunchArgument('use_dummy_detections', default_value='false'),
+        DeclareLaunchArgument('save_debug_frames', default_value='true'),
+        DeclareLaunchArgument('debug_frames_dir', default_value='/ws/detection_frames'),
+        DeclareLaunchArgument('debug_frame_period_s', default_value='1.0'),
 
         # GeoJSON bridge arguments
         DeclareLaunchArgument('publish_to_api', default_value='false'),
@@ -37,6 +40,9 @@ def generate_launch_description():
                 'rgb_image_topic': LaunchConfiguration('rgb_image_topic'),
                 'depth_image_topic': LaunchConfiguration('depth_image_topic'),
                 'use_dummy_detections': LaunchConfiguration('use_dummy_detections'),
+                'save_debug_frames': LaunchConfiguration('save_debug_frames'),
+                'debug_frames_dir': LaunchConfiguration('debug_frames_dir'),
+                'debug_frame_period_s': LaunchConfiguration('debug_frame_period_s'),
             }],
         ),
 
