@@ -23,6 +23,7 @@ services:
       - ./best.pt:/ws/best.pt:ro               # model weights
       - ./samples:/ws/samples                  # periodic GeoJSON snapshots
       - ./detection_frames:/ws/detection_frames # RGB frames with detection overlays
+      - ./thermal_frames:/ws/thermal_frames     # optional FLIR debug snapshots
 
     network_mode: host    # shares host network so ROS2 DDS works seamlessly
     ipc: host             # shared memory for fast DDS transport

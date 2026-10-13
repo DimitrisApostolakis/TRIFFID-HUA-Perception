@@ -22,6 +22,9 @@ def generate_launch_description():
         DeclareLaunchArgument('save_debug_frames', default_value='true'),
         DeclareLaunchArgument('debug_frames_dir', default_value='/ws/detection_frames'),
         DeclareLaunchArgument('debug_frame_period_s', default_value='1.0'),
+        DeclareLaunchArgument('save_thermal_frames', default_value='false'),
+        DeclareLaunchArgument('thermal_frames_dir', default_value='/ws/thermal_frames'),
+        DeclareLaunchArgument('thermal_frame_period_s', default_value='1.0'),
 
         # GeoJSON bridge arguments
         DeclareLaunchArgument('publish_to_api', default_value='false'),
@@ -46,6 +49,9 @@ def generate_launch_description():
                 'save_debug_frames': LaunchConfiguration('save_debug_frames'),
                 'debug_frames_dir': LaunchConfiguration('debug_frames_dir'),
                 'debug_frame_period_s': LaunchConfiguration('debug_frame_period_s'),
+                'save_thermal_frames': LaunchConfiguration('save_thermal_frames'),
+                'thermal_frames_dir': LaunchConfiguration('thermal_frames_dir'),
+                'thermal_frame_period_s': LaunchConfiguration('thermal_frame_period_s'),
             }],
         ),
 

@@ -136,6 +136,9 @@ class UGVPerceptionNode(Node):
         self.declare_parameter('save_debug_frames', True)
         self.declare_parameter('debug_frames_dir', '/ws/detection_frames')
         self.declare_parameter('debug_frame_period_s', 1.0)
+        self.declare_parameter('save_thermal_frames', False)
+        self.declare_parameter('thermal_frames_dir', '/ws/thermal_frames')
+        self.declare_parameter('thermal_frame_period_s', 1.0)
         # Topic names
         self.declare_parameter('rgb_image_topic', DEFAULT_RGB_TOPIC)
         self.declare_parameter('depth_image_topic', DEFAULT_DEPTH_TOPIC)
@@ -157,6 +160,9 @@ class UGVPerceptionNode(Node):
         self.save_debug_frames = self.get_parameter('save_debug_frames').value
         self.debug_frames_dir = self.get_parameter('debug_frames_dir').value
         self.debug_frame_period_s = self.get_parameter('debug_frame_period_s').value
+        self.save_thermal_frames = self.get_parameter('save_thermal_frames').value
+        self.thermal_frames_dir = self.get_parameter('thermal_frames_dir').value
+        self.thermal_frame_period_s = self.get_parameter('thermal_frame_period_s').value
         self.rgb_topic = self.get_parameter('rgb_image_topic').value
         self.depth_topic = self.get_parameter('depth_image_topic').value
         self.thermal_topic = self.get_parameter('thermal_image_topic').value
@@ -176,6 +182,7 @@ class UGVPerceptionNode(Node):
         # ── State ───────────────────────────────────────────────────
         self.bridge = CvBridge()
         self._last_debug_save_stamp = None
+        self._last_thermal_save_stamp = None
         if self.save_debug_frames:
             try:
                 os.makedirs(self.debug_frames_dir, exist_ok=True)
@@ -184,6 +191,14 @@ class UGVPerceptionNode(Node):
                     f'Cannot create debug frame directory {self.debug_frames_dir}: {e}'
                 )
                 self.save_debug_frames = False
+        if self.save_thermal_frames:
+            try:
+                os.makedirs(self.thermal_frames_dir, exist_ok=True)
+            except OSError as e:
+                self.get_logger().error(
+                    f'Cannot create thermal frame directory {self.thermal_frames_dir}: {e}'
+                )
+                self.save_thermal_frames = False
         self.camera_frame = CAMERA_FRAME
         self.depth_image = None          # latest depth frame (uint16, mm)
         self.depth_stamp = None
@@ -247,6 +262,11 @@ class UGVPerceptionNode(Node):
         self.get_logger().info(f'  RGB topic:       {self.rgb_topic}')
         self.get_logger().info(f'  Depth topic:     {self.depth_topic}')
         self.get_logger().info(f'  Thermal topic:   {self.thermal_topic}  (listen/debug only)')
+        if self.save_thermal_frames:
+            self.get_logger().info(
+                f'  Thermal frames:  {self.thermal_frames_dir} '
+                f'(debug snapshots, min period {float(self.thermal_frame_period_s):.2f}s)'
+            )
         self.get_logger().info(f'  Camera frame:    {self.camera_frame}')
         self.get_logger().info(f'  Output topic:    /ugv/detections/front/detections_3d  (frame: {self.target_frame})')
         self.get_logger().info(f'  Seg topic:       /ugv/detections/front/segmentation  (mono8 label map)')
@@ -275,7 +295,7 @@ class UGVPerceptionNode(Node):
             self.get_logger().error(f'Depth conversion failed: {e}')
 
     def thermal_callback(self, msg: Image):
-        """Confirm reception of the FLIR thermal stream; processing comes later."""
+        """Confirm FLIR reception and optionally save debug-only snapshots."""
         self.thermal_stamp = msg.header.stamp
         self.thermal_frames_received += 1
         self.get_logger().info(
@@ -283,6 +303,63 @@ class UGVPerceptionNode(Node):
             f'({msg.width}x{msg.height}, encoding={msg.encoding})',
             throttle_duration_sec=5.0,
         )
+
+        if not self.save_thermal_frames:
+            return
+
+        stamp_s = float(msg.header.stamp.sec) + float(msg.header.stamp.nanosec) * 1e-9
+        period_s = max(0.0, float(self.thermal_frame_period_s))
+        should_save = (
+            self._last_thermal_save_stamp is None
+            or period_s == 0.0
+            or stamp_s < self._last_thermal_save_stamp
+            or (stamp_s - self._last_thermal_save_stamp) >= period_s
+        )
+        if not should_save:
+            return
+
+        try:
+            thermal = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+            # Debug snapshots are normalized to viewable 8-bit when the
+            # FLIR stream is a higher-bit-depth single-channel image.
+            if thermal.ndim == 2 and thermal.dtype != np.uint8:
+                finite = np.isfinite(thermal)
+                if not np.any(finite):
+                    self.get_logger().warn(
+                        'Thermal frame contains no finite pixels; skipping snapshot.',
+                        throttle_duration_sec=5.0,
+                    )
+                    return
+                valid = thermal[finite].astype(np.float32)
+                lo = float(np.min(valid))
+                hi = float(np.max(valid))
+                if hi > lo:
+                    debug_thermal = np.clip(
+                        (thermal.astype(np.float32) - lo) * (255.0 / (hi - lo)),
+                        0.0, 255.0,
+                    ).astype(np.uint8)
+                else:
+                    debug_thermal = np.zeros(thermal.shape, dtype=np.uint8)
+            else:
+                debug_thermal = thermal
+
+            filename = (
+                f'thermal_{msg.header.stamp.sec}_'
+                f'{msg.header.stamp.nanosec:09d}.png'
+            )
+            path = os.path.join(self.thermal_frames_dir, filename)
+            if cv2.imwrite(path, debug_thermal):
+                self._last_thermal_save_stamp = stamp_s
+            else:
+                self.get_logger().warn(
+                    f'Failed to save thermal debug frame: {path}',
+                    throttle_duration_sec=5.0,
+                )
+        except Exception as e:
+            self.get_logger().warn(
+                f'Thermal debug frame conversion/save failed: {e}',
+                throttle_duration_sec=5.0,
+            )
 
     def rgb_callback(self, msg: Image):
         """Main processing trigger – runs on every RGB frame."""

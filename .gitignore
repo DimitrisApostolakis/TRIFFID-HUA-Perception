@@ -10,6 +10,7 @@ uav_data/
 samples/
 uav_samples/
 detection_frames/*.png
+thermal_frames/*.png
 
 # ROS2 colcon build artifacts
 build/
