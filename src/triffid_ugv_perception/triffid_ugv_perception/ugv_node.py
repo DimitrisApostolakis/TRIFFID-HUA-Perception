@@ -100,6 +100,7 @@ BASE_FRAME = 'b2/base_link'
 # Default topic names
 DEFAULT_RGB_TOPIC = '/b2/camera_front_435i/realsense_front_435i/color/image_raw_broadcasted'
 DEFAULT_DEPTH_TOPIC = '/b2/camera_front_435i/realsense_front_435i/aligned_depth_to_color/image_raw_broadcasted'
+DEFAULT_THERMAL_TOPIC = '/b2/camera_flir/image_raw_broadcasted'
 
 # Fixed RealSense color intrinsics (640x480 aligned RGB-D stream)
 CAMERA_FRAME = 'camera_color_optical_frame'
@@ -138,6 +139,7 @@ class UGVPerceptionNode(Node):
         # Topic names
         self.declare_parameter('rgb_image_topic', DEFAULT_RGB_TOPIC)
         self.declare_parameter('depth_image_topic', DEFAULT_DEPTH_TOPIC)
+        self.declare_parameter('thermal_image_topic', DEFAULT_THERMAL_TOPIC)
 
         self.model_path = self.get_parameter('model_path').value
         self.conf_thresh = self.get_parameter('confidence_threshold').value
@@ -157,6 +159,7 @@ class UGVPerceptionNode(Node):
         self.debug_frame_period_s = self.get_parameter('debug_frame_period_s').value
         self.rgb_topic = self.get_parameter('rgb_image_topic').value
         self.depth_topic = self.get_parameter('depth_image_topic').value
+        self.thermal_topic = self.get_parameter('thermal_image_topic').value
 
         # ── YOLO model ──────────────────────────────────────────────
         if _HAS_YOLO:
@@ -184,6 +187,8 @@ class UGVPerceptionNode(Node):
         self.camera_frame = CAMERA_FRAME
         self.depth_image = None          # latest depth frame (uint16, mm)
         self.depth_stamp = None
+        self.thermal_stamp = None
+        self.thermal_frames_received = 0
         self.tracker = ByteTracker(
             iou_threshold=float(self.tracker_iou),
             iou_threshold_low=float(self.tracker_iou_low),
@@ -215,6 +220,12 @@ class UGVPerceptionNode(Node):
             self.depth_callback,
             sensor_qos,
         )
+        self.sub_thermal = self.create_subscription(
+            Image,
+            self.thermal_topic,
+            self.thermal_callback,
+            sensor_qos,
+        )
         # ── Publishers ───────────────────────────────────────────────
         self.pub_det3d = self.create_publisher(
             Detection3DArray,
@@ -235,6 +246,7 @@ class UGVPerceptionNode(Node):
         self.get_logger().info('UGV Perception node started (pixel-aligned RGB-D pipeline).')
         self.get_logger().info(f'  RGB topic:       {self.rgb_topic}')
         self.get_logger().info(f'  Depth topic:     {self.depth_topic}')
+        self.get_logger().info(f'  Thermal topic:   {self.thermal_topic}  (listen/debug only)')
         self.get_logger().info(f'  Camera frame:    {self.camera_frame}')
         self.get_logger().info(f'  Output topic:    /ugv/detections/front/detections_3d  (frame: {self.target_frame})')
         self.get_logger().info(f'  Seg topic:       /ugv/detections/front/segmentation  (mono8 label map)')
@@ -261,6 +273,16 @@ class UGVPerceptionNode(Node):
             self.depth_stamp = msg.header.stamp
         except Exception as e:
             self.get_logger().error(f'Depth conversion failed: {e}')
+
+    def thermal_callback(self, msg: Image):
+        """Confirm reception of the FLIR thermal stream; processing comes later."""
+        self.thermal_stamp = msg.header.stamp
+        self.thermal_frames_received += 1
+        self.get_logger().info(
+            f'Thermal stream active: received frame #{self.thermal_frames_received} '
+            f'({msg.width}x{msg.height}, encoding={msg.encoding})',
+            throttle_duration_sec=5.0,
+        )
 
     def rgb_callback(self, msg: Image):
         """Main processing trigger – runs on every RGB frame."""
