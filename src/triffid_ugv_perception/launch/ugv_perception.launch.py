@@ -25,7 +25,6 @@ def generate_launch_description():
         DeclareLaunchArgument('save_thermal_frames', default_value='false'),
         DeclareLaunchArgument('thermal_frames_dir', default_value='/ws/thermal_frames'),
         DeclareLaunchArgument('thermal_frame_period_s', default_value='1.0'),
-        DeclareLaunchArgument('thermal_rotate_180', default_value='false'),
 
         # GeoJSON bridge arguments
         DeclareLaunchArgument('use_position_api', default_value='true'),
@@ -57,7 +56,6 @@ def generate_launch_description():
                 'save_thermal_frames': LaunchConfiguration('save_thermal_frames'),
                 'thermal_frames_dir': LaunchConfiguration('thermal_frames_dir'),
                 'thermal_frame_period_s': LaunchConfiguration('thermal_frame_period_s'),
-                'thermal_rotate_180': LaunchConfiguration('thermal_rotate_180'),
             }],
         ),
 

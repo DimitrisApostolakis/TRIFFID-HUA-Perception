@@ -139,7 +139,6 @@ class UGVPerceptionNode(Node):
         self.declare_parameter('save_thermal_frames', False)
         self.declare_parameter('thermal_frames_dir', '/ws/thermal_frames')
         self.declare_parameter('thermal_frame_period_s', 1.0)
-        self.declare_parameter('thermal_rotate_180', False)
         # Topic names
         self.declare_parameter('rgb_image_topic', DEFAULT_RGB_TOPIC)
         self.declare_parameter('depth_image_topic', DEFAULT_DEPTH_TOPIC)
@@ -164,7 +163,6 @@ class UGVPerceptionNode(Node):
         self.save_thermal_frames = self.get_parameter('save_thermal_frames').value
         self.thermal_frames_dir = self.get_parameter('thermal_frames_dir').value
         self.thermal_frame_period_s = self.get_parameter('thermal_frame_period_s').value
-        self.thermal_rotate_180 = self.get_parameter('thermal_rotate_180').value
         self.rgb_topic = self.get_parameter('rgb_image_topic').value
         self.depth_topic = self.get_parameter('depth_image_topic').value
         self.thermal_topic = self.get_parameter('thermal_image_topic').value
@@ -355,11 +353,6 @@ class UGVPerceptionNode(Node):
                 and encoding in ('rgb8', 'rgb16')
             ):
                 debug_thermal = cv2.cvtColor(debug_thermal, cv2.COLOR_RGB2BGR)
-
-            if self.thermal_rotate_180:
-                debug_thermal = cv2.rotate(
-                    debug_thermal, cv2.ROTATE_180
-                )
 
             filename = (
                 f'thermal_{msg.header.stamp.sec}_'
