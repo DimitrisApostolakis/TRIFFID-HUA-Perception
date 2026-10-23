@@ -177,6 +177,7 @@ class GeoJSONBridge(Node):
             'position_api_url',
             'https://crispres.com/wp-json/mqtt/v1/latest',
         )
+        self.declare_parameter('use_position_api', True)
         self.declare_parameter('ugv_status_topic', '/b2/ugv_status')
         self.declare_parameter('ugv_status_timeout_s', 3.0)
         self.declare_parameter('publish_to_api', False)
@@ -190,6 +191,7 @@ class GeoJSONBridge(Node):
 
         self.api_url = self.get_parameter('api_url').value
         self.position_api_url = self.get_parameter('position_api_url').value
+        self.use_position_api = bool(self.get_parameter('use_position_api').value)
         self.ugv_status_topic = self.get_parameter('ugv_status_topic').value
         self.ugv_status_timeout_s = max(
             0.1, float(self.get_parameter('ugv_status_timeout_s').value)
@@ -320,11 +322,17 @@ class GeoJSONBridge(Node):
         # Poll the UGV status API on a background thread so network latency
         # never blocks ROS callbacks. Only latitude/longitude are consumed.
         self._position_stop = threading.Event()
-        self._position_worker = threading.Thread(
-            target=self._position_api_worker_loop,
-            daemon=True,
-        )
-        self._position_worker.start()
+        self._position_worker = None
+        if self.use_position_api:
+            self._position_worker = threading.Thread(
+                target=self._position_api_worker_loop,
+                daemon=True,
+            )
+            self._position_worker.start()
+        else:
+            self.get_logger().info(
+                '  Position API disabled; using ROS UGV status / /fix fallbacks.'
+            )
         self.create_timer(1.0, self._check_ugv_status_freshness)
 
         # Spatial deduplication radius (metres)

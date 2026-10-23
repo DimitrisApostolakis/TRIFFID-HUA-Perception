@@ -27,6 +27,7 @@ def generate_launch_description():
         DeclareLaunchArgument('thermal_frame_period_s', default_value='1.0'),
 
         # GeoJSON bridge arguments
+        DeclareLaunchArgument('use_position_api', default_value='true'),
         DeclareLaunchArgument('ugv_status_topic', default_value='/b2/ugv_status'),
         DeclareLaunchArgument('ugv_status_timeout_s', default_value='3.0'),
         DeclareLaunchArgument('publish_to_api', default_value='false'),
@@ -64,6 +65,7 @@ def generate_launch_description():
             name='geojson_bridge',
             output='screen',
             parameters=[{
+                'use_position_api': LaunchConfiguration('use_position_api'),
                 'ugv_status_topic': LaunchConfiguration('ugv_status_topic'),
                 'ugv_status_timeout_s': LaunchConfiguration('ugv_status_timeout_s'),
                 'publish_to_api': LaunchConfiguration('publish_to_api'),
