@@ -188,7 +188,7 @@ class GeoJSONBridge(Node):
         self.declare_parameter('dedup_radius_m', 3.0)
         self.declare_parameter('publish_period_s', 5.0)
         self.declare_parameter('output_dir', '/ws/samples')
-        self.declare_parameter('target_geojson_stamp', '')
+        self.declare_parameter('target_geojson_stamp', 0)
 
         self.api_url = self.get_parameter('api_url').value
         self.position_api_url = self.get_parameter('position_api_url').value
@@ -201,9 +201,9 @@ class GeoJSONBridge(Node):
         self.save_to_disk = self.get_parameter('save_to_disk').value
         self.publish_period_s = float(self.get_parameter('publish_period_s').value)
         self.output_dir = self.get_parameter('output_dir').value
-        self.target_geojson_stamp = str(
+        self.target_geojson_stamp = int(
             self.get_parameter('target_geojson_stamp').value
-        ).strip()
+        )
 
         # GPS state
         # Sliding window for median filtering of noisy GPS fixes
@@ -808,7 +808,11 @@ class GeoJSONBridge(Node):
         stamp_key = (
             f'{msg.header.stamp.sec}_{msg.header.stamp.nanosec:09d}'
         )
-        if self.target_geojson_stamp and stamp_key == self.target_geojson_stamp:
+        stamp_ns = (
+            int(msg.header.stamp.sec) * 1_000_000_000
+            + int(msg.header.stamp.nanosec)
+        )
+        if self.target_geojson_stamp and stamp_ns == self.target_geojson_stamp:
             target_geojson = {
                 "type": "FeatureCollection",
                 "frame_stamp": {
