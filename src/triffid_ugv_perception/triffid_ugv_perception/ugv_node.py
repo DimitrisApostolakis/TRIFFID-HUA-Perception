@@ -343,6 +343,17 @@ class UGVPerceptionNode(Node):
             else:
                 debug_thermal = thermal
 
+            # ROS rgb8 is RGB, while OpenCV imwrite expects BGR channel order.
+            # Convert only for RGB-encoded 3-channel debug frames so the saved
+            # PNG preserves the FLIR palette colours correctly.
+            encoding = str(msg.encoding).lower()
+            if (
+                debug_thermal.ndim == 3
+                and debug_thermal.shape[2] == 3
+                and encoding in ('rgb8', 'rgb16')
+            ):
+                debug_thermal = cv2.cvtColor(debug_thermal, cv2.COLOR_RGB2BGR)
+
             filename = (
                 f'thermal_{msg.header.stamp.sec}_'
                 f'{msg.header.stamp.nanosec:09d}.png'
