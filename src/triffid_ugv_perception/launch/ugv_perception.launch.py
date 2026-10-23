@@ -34,6 +34,7 @@ def generate_launch_description():
         DeclareLaunchArgument('save_to_disk', default_value='true'),
         DeclareLaunchArgument('publish_period_s', default_value='5.0'),
         DeclareLaunchArgument('output_dir', default_value='/ws/samples'),
+        DeclareLaunchArgument('target_geojson_stamp', default_value=''),
 
         # UGV Perception Node
         Node(
@@ -72,6 +73,7 @@ def generate_launch_description():
                 'save_to_disk': LaunchConfiguration('save_to_disk'),
                 'publish_period_s': LaunchConfiguration('publish_period_s'),
                 'output_dir': LaunchConfiguration('output_dir'),
+                'target_geojson_stamp': LaunchConfiguration('target_geojson_stamp'),
             }],
         ),
     ])

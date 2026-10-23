@@ -188,6 +188,7 @@ class GeoJSONBridge(Node):
         self.declare_parameter('dedup_radius_m', 3.0)
         self.declare_parameter('publish_period_s', 5.0)
         self.declare_parameter('output_dir', '/ws/samples')
+        self.declare_parameter('target_geojson_stamp', '')
 
         self.api_url = self.get_parameter('api_url').value
         self.position_api_url = self.get_parameter('position_api_url').value
@@ -200,6 +201,9 @@ class GeoJSONBridge(Node):
         self.save_to_disk = self.get_parameter('save_to_disk').value
         self.publish_period_s = float(self.get_parameter('publish_period_s').value)
         self.output_dir = self.get_parameter('output_dir').value
+        self.target_geojson_stamp = str(
+            self.get_parameter('target_geojson_stamp').value
+        ).strip()
 
         # GPS state
         # Sliding window for median filtering of noisy GPS fixes
@@ -800,6 +804,68 @@ class GeoJSONBridge(Node):
         geojson['features'] = _deduplicate_features(
             geojson['features'], self._dedup_radius_m
         )
+
+        stamp_key = (
+            f'{msg.header.stamp.sec}_{msg.header.stamp.nanosec:09d}'
+        )
+        if self.target_geojson_stamp and stamp_key == self.target_geojson_stamp:
+            target_geojson = {
+                "type": "FeatureCollection",
+                "frame_stamp": {
+                    "sec": int(msg.header.stamp.sec),
+                    "nanosec": int(msg.header.stamp.nanosec),
+                },
+                "features": [],
+            }
+            for feature in geojson['features']:
+                copied = json.loads(json.dumps(feature))
+                copied.setdefault('properties', {})['frame_stamp'] = stamp_key
+                target_geojson['features'].append(copied)
+
+            with self._position_lock:
+                gps_valid = self.gps_valid
+                robot_lat = self.robot_lat
+                robot_lon = self.robot_lon
+                robot_alt = self.robot_alt
+                position_source = self._position_source
+
+            if gps_valid:
+                target_geojson['features'].append({
+                    "type": "Feature",
+                    "id": "ugv",
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [robot_lon, robot_lat],
+                    },
+                    "properties": {
+                        "class": "ugv",
+                        "source": "ugv_pose",
+                        "position_source": position_source,
+                        "local_frame": False,
+                        "altitude_m": round(float(robot_alt), 2),
+                        "frame_stamp": stamp_key,
+                        "marker-color": "#000000",
+                        "marker-size": "large",
+                        "marker-symbol": "car",
+                    },
+                })
+
+            target_path = (
+                Path(self.output_dir)
+                / f'ugv_detections_{stamp_key}.geojson'
+            )
+            try:
+                _atomic_write_geojson(target_path, target_geojson)
+                self.get_logger().info(
+                    f'Target-frame GeoJSON: '
+                    f'{len(target_geojson["features"])} features → '
+                    f'{target_path}'
+                )
+            except OSError as e:
+                self.get_logger().warn(
+                    f'Target-frame GeoJSON write failed: {e}'
+                )
+
         self._accumulated = _merge_features(
             self._accumulated, geojson['features'], self._dedup_radius_m,
         )
