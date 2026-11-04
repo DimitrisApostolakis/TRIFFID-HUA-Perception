@@ -5,6 +5,8 @@
 *.SRT
 uav_videos/
 uav_data/
+uav_models/
+uav_supports/
 
 # Runtime output directories (GeoJSON snapshots / detection runs)
 samples/
@@ -29,3 +31,4 @@ __pycache__/
 
 # Secrets / credentials
 *.env
+
