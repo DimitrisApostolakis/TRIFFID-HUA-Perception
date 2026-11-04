@@ -1,5 +1,6 @@
 """Orchestrates IO, angular selection, a replaceable backend and JSON export."""
 from pathlib import Path
+import copy
 import json
 import logging
 
@@ -102,3 +103,61 @@ def segment_top_view(image, output_dir, backend, classes, *, supports, projectio
     payload['support_bank'] = supports.metadata()
     payload['postprocessing'] = {'min_area_px': min_area_px, 'connectivity': 8}
     return write_json(Path(output_dir) / 'polygon_segmentations.json', payload)
+
+
+def detect_frames(manifest, output_dir, backend, classes, *, supports, min_area_px=1):
+    """Reuse selected PNGs and telemetry exactly. No MP4 decoding/reselection.
+
+    The manifest can contain any nonempty distinct set previously exported by
+    select; eight views is the default, not a hard-coded restriction.
+    """
+    path = Path(manifest).resolve()
+    payload = json.loads(path.read_text(encoding='utf-8-sig'))
+    if not isinstance(payload, dict) or payload.get('schema_version') != 'triffid.uav.selection.v1':
+        raise ValueError('Expected a selected_frames.json selection manifest')
+    sources = payload.get('sources')
+    if not isinstance(sources, list) or not sources:
+        raise ValueError('Selection manifest contains no frames')
+    if min_area_px < 1 or not classes or any(c.geometry != 'Point' for c in classes):
+        raise ValueError('detect-frames requires point classes and a positive minimum area')
+    seen_ids, seen_frames, seen_files = set(), set(), set()
+    resolved = []
+    for source in sources:
+        if not isinstance(source, dict) or source.get('source_type') != 'video_frame':
+            raise ValueError('Selection sources must be video frames')
+        source_id, frame = source.get('source_id'), source.get('frame_index')
+        if not isinstance(source_id, str) or not source_id or source_id in seen_ids:
+            raise ValueError('Selection source IDs must be nonempty and distinct')
+        if not isinstance(frame, int) or isinstance(frame, bool) or frame < 0 or frame in seen_frames:
+            raise ValueError('Selection frame indices must be nonnegative and distinct')
+        image_file = source.get('image_file')
+        if not isinstance(image_file, str) or not image_file:
+            raise ValueError('Selection source must identify an image_file')
+        image_path = (path.parent / image_file).resolve()
+        if image_path in seen_files or not image_path.is_file():
+            raise ValueError(f'Missing or repeated selected frame file: {image_path}')
+        for dimension in ('width', 'height'):
+            if not isinstance(source.get(dimension), int) or source[dimension] < 1:
+                raise ValueError('Selection frame dimensions must be positive integers')
+        seen_ids.add(source_id)
+        seen_frames.add(frame)
+        seen_files.add(image_path)
+        resolved.append((source, image_path))
+    supports.require_classes(classes)
+    backend.prepare(classes, supports)
+    inferred = []
+    for original, image_path in resolved:
+        rgb = read_rgb(image_path)
+        if rgb.shape[:2] != (original['height'], original['width']):
+            raise ValueError(f'Selected frame dimensions differ from manifest: {image_path}')
+        source = copy.deepcopy(original)
+        # Keep references valid even when output and selection directories differ.
+        source['image_file'] = str(image_path)
+        source['observations'] = []
+        infer_source(backend, rgb, classes, source, min_area_px)
+        inferred.append(source)
+    output = document('point_detections', inferred, backend.metadata(), classes)
+    output.update({key: payload[key] for key in ('video', 'srt_file', 'selection') if key in payload})
+    output.update({'selection_manifest': str(path), 'support_bank': supports.metadata(),
+                   'postprocessing': {'min_area_px': min_area_px, 'connectivity': 8}})
+    return write_json(Path(output_dir) / 'point_detections.json', output)

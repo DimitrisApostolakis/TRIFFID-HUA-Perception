@@ -134,11 +134,11 @@ class SupportBank:
             raise ValueError(f'{item.name}: provide 5 distinct support images, not repeated paths')
         return tuple(supports)
 
-    def _inspect(self, classes):
+    def _inspect(self, classes, shots=EXAMPLES_PER_CLASS):
         errors, fingerprints, valid = [], {}, 0
         for item in classes:
             try:
-                examples = self.for_class(item)
+                examples = self.for_class(item)[:shots]
             except ValueError as error:
                 errors.append(str(error))
                 continue
@@ -169,7 +169,7 @@ class SupportBank:
         classes = tuple(classes)
         if not classes or len({item.id for item in classes}) != len(classes):
             raise ValueError('Select a nonempty set of distinct UAV classes')
-        errors, fingerprints, _ = self._inspect(classes)
+        errors, fingerprints, _ = self._inspect(classes, shots=shots)
         if errors:
             raise ValueError('Invalid support bank:\n' + '\n'.join(errors))
         examples = tuple((item.id, self.for_class(item)[:shots]) for item in classes)

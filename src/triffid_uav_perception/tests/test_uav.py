@@ -12,7 +12,7 @@ from triffid_uav_perception.frame_selection import angular_distance, select_view
 from triffid_uav_perception.masks import decode_rle, encode_rle, observations_from_prediction
 from triffid_uav_perception.models.base import ClassPrediction
 from triffid_uav_perception.ontology import BY_ID, CLASSES, classes_for
-from triffid_uav_perception.pipeline import detect_video, segment_top_view, select_video_frames
+from triffid_uav_perception.pipeline import detect_frames, detect_video, segment_top_view, select_video_frames
 from triffid_uav_perception.srt_metadata import SrtFrameMeta, parse_srt
 from triffid_uav_perception.supports import SupportBank
 from triffid_uav_perception.uav_node import build_parser
@@ -260,3 +260,46 @@ def test_failed_export_does_not_replace_existing_file(tmp_path):
 def test_select_cli_can_parse_without_sansa_options():
     args = build_parser().parse_args(['select', 'flight.mp4', '--output', 'out'])
     assert args.views == 8 and args.selection_mode == 'orbit'
+
+
+def test_detect_preexported_frames_does_not_need_video_or_srt(synthetic_flight, tmp_path, bank_selection):
+    video, srt = synthetic_flight
+    manifest = select_video_frames(video, srt, tmp_path / 'selected')
+    original = json.loads(manifest.read_text())
+    video.unlink()
+    srt.unlink()
+    classes = classes_for('Point', 'civilian vehicle,window')
+    backend = FakeBackend()
+    result = detect_frames(manifest, tmp_path / 'inference', backend, classes,
+                           supports=bank_selection(classes, shots=1))
+    exported = json.loads(result.read_text())
+    assert backend.calls == 8
+    assert len(exported['sources']) == 8
+    assert exported['support_bank']['shots'] == 1
+    for before, after in zip(original['sources'], exported['sources']):
+        assert before['frame_index'] == after['frame_index']
+        assert before['timestamp_s'] == after['timestamp_s']
+        assert before['telemetry'] == after['telemetry']
+        assert Path(after['image_file']).is_file()
+        assert len(after['observations']) == 2
+
+
+@pytest.mark.parametrize('mutation', ['missing_file', 'duplicate_source', 'duplicate_frame', 'dimensions'])
+def test_invalid_exported_frames(synthetic_flight, tmp_path, bank_selection, mutation):
+    video, srt = synthetic_flight
+    manifest = select_video_frames(video, srt, tmp_path / 'selected')
+    payload = json.loads(manifest.read_text())
+    if mutation == 'missing_file':
+        payload['sources'][0]['image_file'] = 'missing.png'
+    elif mutation == 'duplicate_source':
+        payload['sources'][1]['source_id'] = payload['sources'][0]['source_id']
+    elif mutation == 'duplicate_frame':
+        payload['sources'][1]['frame_index'] = payload['sources'][0]['frame_index']
+    else:
+        payload['sources'][0]['width'] = 999
+    manifest.write_text(json.dumps(payload))
+    classes = classes_for('Point', 'person')
+    with pytest.raises(ValueError):
+        detect_frames(manifest, tmp_path / 'inference', FakeBackend(), classes,
+                      supports=bank_selection(classes))
+    assert not (tmp_path / 'inference/point_detections.json').exists()

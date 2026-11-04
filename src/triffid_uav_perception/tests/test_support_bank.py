@@ -112,7 +112,21 @@ def test_invalid_bank_is_rejected_before_model_loading(bank_selection, mutation)
     bank = SupportBank(root)
     assert not bank.validate(classes)['valid']
     with pytest.raises(ValueError):
-        bank.select(classes, shots=1)  # Bank still needs five valid examples in 1-shot mode.
+        bank.select(classes, shots=5)
+
+
+def test_one_shot_can_run_while_other_slots_are_unfilled(bank_selection):
+    classes = classes_for('Point', 'person')
+    full = bank_selection(classes)
+    root = full.for_class(BY_ID[23])[0].image.parent
+    for support in full.for_class(BY_ID[23])[1:]:
+        support.image.unlink()
+        support.mask.unlink()
+    bank = SupportBank(root)
+    assert len(bank.select(classes, shots=1).for_class(BY_ID[23])) == 1
+    assert not bank.validate(classes)['valid']
+    with pytest.raises(ValueError):
+        bank.select(classes, shots=5)
 
 
 def test_add_normalizes_indexed_mask_and_never_overwrites(tmp_path):

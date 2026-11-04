@@ -133,6 +133,8 @@ Create the bank with `python -m triffid_uav_perception.uav_node bank init`.
 It defines 35 classes x 5 example slots (175 pairs). Add real labelled examples
 with `bank add`, then check them with `bank validate`. All backends receive the
 same ordered supports; `--shots 5` is the default and `--shots 1` uses the first.
+Use `detect-frames selected_frames.json` to infer already-exported frames without
+reopening the video. A 1-shot test can run while slots 2–5 are still unfilled.
 The former UAV YOLO/ByteTrack/pixel-GeoJSON and API-polling CLI has been replaced;
 UGV inference, tracking and delivery are unchanged.
 

@@ -1,11 +1,12 @@
 # UAV perception: selected views + SANSA + Unity JSON
 
-The UAV node has three perception commands plus shared support-bank management:
+The UAV node provides video, exported-frame and top-view inference plus shared support-bank management:
 
 1. `select`: MP4 + DJI SRT -> angularly selected PNG frames and a selection manifest.
 2. `detect`: MP4 + DJI SRT + visual supports -> point-class observations in those views.
 3. `segment-top-view`: one supplied top-view RGB image + visual supports -> polygon-class masks.
-4. `bank init/add/validate`: create, fill and check the model-independent support bank.
+4. `detect-frames`: reuse PNG frames and telemetry from a previously exported selection manifest.
+5. `bank init/add/validate`: create, fill and check the model-independent support bank.
 
 The node exports **pixel observations**, not geographic GeoJSON. Unity is responsible
 for camera projection, raycasting, geographic conversion and cross-view deduplication.
@@ -100,13 +101,16 @@ python -m triffid_uav_perception.uav_node bank validate \
 
 Detection validates only its requested point classes; top-view segmentation only
 its requested polygon classes. A subset such as `--classes "debris,person"` needs
-five populated examples for each of those classes, not the rest of the bank.
+populated examples for each selected shot of those classes, not the rest of
+the bank. Five-shot runs need all five; one-shot runs need the first slot only.
 
 ### Retrieval and reproducibility
 
 Use `--support-bank uav_supports` (the default) on either inference command.
 `--shots 5` retrieves all five examples per class. `--shots 1` deterministically
-retrieves the first example, while the bank still stores and validates all five.
+retrieves the first example, while the bank retains five slots per class. For an initial 1-shot test only the
+first slot needs to be populated; `--shots 5` requires all five. `bank validate`
+always checks all five slots, so an unfinished bank still reports incomplete.
 No random sampling or duplication is used to fill missing examples. All classes
 in one run use the same shot count. A bank directory or an explicit manifest path
 is accepted; relative asset paths resolve against the manifest, not the shell's
@@ -181,6 +185,33 @@ candidate objects; touching objects can merge and disconnected pieces can split.
 IDs identify observations, not guaranteed object instances or persistent tracks.
 `--min-area-px` can remove tiny components (default 1, no hidden area filtering).
 Class masks may overlap; no arbitrary cross-class suppression is applied.
+
+## Reuse the eight frames already exported
+
+Use the existing selection manifest so neither MP4 nor SRT is opened again:
+
+```bash
+python -m triffid_uav_perception.uav_node detect-frames \
+  uav_samples/merged_cut_selection/selected_frames.json \
+  --output uav_samples/merged_cut_detections \
+  --sansa-repo uav_models/SANSA \
+  --checkpoint /mnt/d/Models/Checkpoints/SANSA/adapter_generalist.pth \
+  --sam2-checkpoint /mnt/d/Models/Checkpoints/SANSA/sam2_hiera_large.pt \
+  --support-bank uav_supports --shots 1 --classes "civilian vehicle,window" \
+  --device cuda
+```
+
+This initial test needs one filled support slot for each of those two classes.
+The bank still has five slots per class. Switch to `--shots 5` after all five
+examples are available. Other classes do not run unless requested or the class
+filter is omitted. The manifest keeps the selected order, frame indices and camera
+telemetry. The exported PNGs must be accessible at their recorded relative paths
+and keep their original dimensions. Detection output uses resolved image paths
+so it can live in a different directory. Results are in `point_detections.json`;
+no model inference is performed by the `select` command itself.
+
+A selected view used as its own support is a self-reference check, not an
+independent test of generalization; use different support images for evaluation.
 
 ## Segment polygon classes in the top-view image
 

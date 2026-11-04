@@ -64,6 +64,10 @@ def build_parser():
     detect = commands.add_parser('detect', help='Segment point-class objects in selected video views')
     _video_options(detect)
     _model_options(detect)
+    frames = commands.add_parser('detect-frames', help='Infer existing frames from selected_frames.json, without reading MP4')
+    frames.add_argument('manifest', help='Previously exported selected_frames.json')
+    frames.add_argument('--output', required=True)
+    _model_options(frames)
     top = commands.add_parser('segment-top-view', help='Segment polygon classes in a supplied top-view image')
     top.add_argument('image')
     top.add_argument('--output', required=True)
@@ -93,8 +97,8 @@ def main(argv=None):
                 if not report['valid']:
                     parser.exit(2)
             return
-        from .pipeline import detect_video, segment_top_view, select_video_frames
-        if args.command != 'segment-top-view':
+        from .pipeline import detect_video, detect_frames, segment_top_view, select_video_frames
+        if args.command in ('select', 'detect'):
             selection = dict(mode=args.selection_mode, views=args.views, start_s=args.start_seconds,
                              end_s=args.end_seconds, angle_offset=args.angle_offset,
                              tolerance=args.angle_tolerance, centre=args.orbit_centre,
@@ -104,7 +108,7 @@ def main(argv=None):
         else:
             if args.min_area_px < 1:
                 raise ValueError('--min-area-px must be positive')
-            geometry = 'Point' if args.command == 'detect' else 'Polygon'
+            geometry = 'Point' if args.command in ('detect', 'detect-frames') else 'Polygon'
             classes = classes_for(geometry, args.classes)
             from .supports import SupportBank
             supports = SupportBank(args.support_bank).select(classes, shots=args.shots)
@@ -114,6 +118,9 @@ def main(argv=None):
             if args.command == 'detect':
                 result = detect_video(args.video, args.srt, args.output, backend, classes,
                                       supports=supports, min_area_px=args.min_area_px, **selection)
+            elif args.command == 'detect-frames':
+                result = detect_frames(args.manifest, args.output, backend, classes,
+                                       supports=supports, min_area_px=args.min_area_px)
             else:
                 result = segment_top_view(args.image, args.output, backend, classes,
                                           supports=supports, projection_json=args.projection_json,
