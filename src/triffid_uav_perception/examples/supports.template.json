@@ -1,0 +1,215 @@
+{
+  "schema_version": "triffid.uav.supports.v1",
+  "classes": {
+    "water": [
+      {
+        "image": "images/water.jpg",
+        "mask": "masks/water.png"
+      }
+    ],
+    "green tree": [
+      {
+        "image": "images/green_tree.jpg",
+        "mask": "masks/green_tree.png"
+      }
+    ],
+    "flame": [
+      {
+        "image": "images/flame.jpg",
+        "mask": "masks/flame.png"
+      }
+    ],
+    "smoke": [
+      {
+        "image": "images/smoke.jpg",
+        "mask": "masks/smoke.png"
+      }
+    ],
+    "destroyed vehicle": [
+      {
+        "image": "images/destroyed_vehicle.jpg",
+        "mask": "masks/destroyed_vehicle.png"
+      }
+    ],
+    "green plant": [
+      {
+        "image": "images/green_plant.jpg",
+        "mask": "masks/green_plant.png"
+      }
+    ],
+    "window": [
+      {
+        "image": "images/window.jpg",
+        "mask": "masks/window.png"
+      }
+    ],
+    "building": [
+      {
+        "image": "images/building.jpg",
+        "mask": "masks/building.png"
+      }
+    ],
+    "destroyed building": [
+      {
+        "image": "images/destroyed_building.jpg",
+        "mask": "masks/destroyed_building.png"
+      }
+    ],
+    "debris": [
+      {
+        "image": "images/debris.jpg",
+        "mask": "masks/debris.png"
+      }
+    ],
+    "dirt road": [
+      {
+        "image": "images/dirt_road.jpg",
+        "mask": "masks/dirt_road.png"
+      }
+    ],
+    "dry tree": [
+      {
+        "image": "images/dry_tree.jpg",
+        "mask": "masks/dry_tree.png"
+      }
+    ],
+    "civilian vehicle": [
+      {
+        "image": "images/civilian_vehicle.jpg",
+        "mask": "masks/civilian_vehicle.png"
+      }
+    ],
+    "road": [
+      {
+        "image": "images/road.jpg",
+        "mask": "masks/road.png"
+      }
+    ],
+    "person": [
+      {
+        "image": "images/person.jpg",
+        "mask": "masks/person.png"
+      }
+    ],
+    "green grass": [
+      {
+        "image": "images/green_grass.jpg",
+        "mask": "masks/green_grass.png"
+      }
+    ],
+    "boat": [
+      {
+        "image": "images/boat.jpg",
+        "mask": "masks/boat.png"
+      }
+    ],
+    "pavement": [
+      {
+        "image": "images/pavement.jpg",
+        "mask": "masks/pavement.png"
+      }
+    ],
+    "dry grass": [
+      {
+        "image": "images/dry_grass.jpg",
+        "mask": "masks/dry_grass.png"
+      }
+    ],
+    "excavator": [
+      {
+        "image": "images/excavator.jpg",
+        "mask": "masks/excavator.png"
+      }
+    ],
+    "door": [
+      {
+        "image": "images/door.jpg",
+        "mask": "masks/door.png"
+      }
+    ],
+    "mud": [
+      {
+        "image": "images/mud.jpg",
+        "mask": "masks/mud.png"
+      }
+    ],
+    "burnt tree": [
+      {
+        "image": "images/burnt_tree.jpg",
+        "mask": "masks/burnt_tree.png"
+      }
+    ],
+    "ambulance": [
+      {
+        "image": "images/ambulance.jpg",
+        "mask": "masks/ambulance.png"
+      }
+    ],
+    "fire truck": [
+      {
+        "image": "images/fire_truck.jpg",
+        "mask": "masks/fire_truck.png"
+      }
+    ],
+    "tower": [
+      {
+        "image": "images/tower.jpg",
+        "mask": "masks/tower.png"
+      }
+    ],
+    "silo": [
+      {
+        "image": "images/silo.jpg",
+        "mask": "masks/silo.png"
+      }
+    ],
+    "burnt grass": [
+      {
+        "image": "images/burnt_grass.jpg",
+        "mask": "masks/burnt_grass.png"
+      }
+    ],
+    "crane": [
+      {
+        "image": "images/crane.jpg",
+        "mask": "masks/crane.png"
+      }
+    ],
+    "stairs": [
+      {
+        "image": "images/stairs.jpg",
+        "mask": "masks/stairs.png"
+      }
+    ],
+    "dry plant": [
+      {
+        "image": "images/dry_plant.jpg",
+        "mask": "masks/dry_plant.png"
+      }
+    ],
+    "tank": [
+      {
+        "image": "images/tank.jpg",
+        "mask": "masks/tank.png"
+      }
+    ],
+    "police vehicle": [
+      {
+        "image": "images/police_vehicle.jpg",
+        "mask": "masks/police_vehicle.png"
+      }
+    ],
+    "burnt plant": [
+      {
+        "image": "images/burnt_plant.jpg",
+        "mask": "masks/burnt_plant.png"
+      }
+    ],
+    "army vehicle": [
+      {
+        "image": "images/army_vehicle.jpg",
+        "mask": "masks/army_vehicle.png"
+      }
+    ]
+  }
+}

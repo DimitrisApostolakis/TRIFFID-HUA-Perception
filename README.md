@@ -6,13 +6,12 @@
 
 ## General Information
 
-Two independent modules, each in its own Docker container, both running on
-live data:
+Two independent modules, each in its own Docker container, with separate runtime dependencies:
 
 | Module | Input | Output |
 |---|---|---|
 | **UGV** (`triffid_ugv_perception`) | Live RGB-D camera topics + GPS/odometry | `Detection3DArray` + GeoJSON on ROS topics, periodic GeoJSON snapshot to disk and/or upsert to the TELESTO backend |
-| **UAV** (`triffid_uav_perception`) | Drone video (MP4 + DJI SRT telemetry sidecar), polled live from API | One pixel-space GeoJSON per video, saved to disk, optional upload to the TELESTO backend |
+| **UAV** (`triffid_uav_perception`) | MP4 + DJI SRT for selected views; separate top-view image; SANSA visual supports | Versioned Unity pixel JSON: exact masks, mask-derived boxes and centroids |
 
 Full topic/message/GeoJSON spec: [INTERFACE.md](INTERFACE.md).
 
@@ -111,75 +110,38 @@ ros2 launch triffid_ugv_perception ugv_perception.launch.py \
 
 ## 2. UAV Module
 
-Drone-video detection producing pixel-space GeoJSON, with
-persistent ByteTrack IDs, each detection reduced to a few independent
-pixel sample points (`Point`/`MultiPoint`), DJI SRT
-telemetry joined per frame so every feature also carries the camera pose
-(`drone_latitude/longitude/altitude_m`, `gimbal_yaw/pitch/roll`). A
-downstream consumer raycasts the pixel points against a 3DGS
-reconstruction to obtain real-world coordinates.
+The UAV node selects eight angular views from MP4 + DJI SRT telemetry, then
+runs **SANSA Universal** with labelled support images/masks for the **15 point
+classes**. A separate top-view image is segmented for the **20 polygon classes**.
+Debris is a point class; Citizen/First responder/Military personnel become Person.
 
-### Build and start the container
+Each observation exports an exact binary mask, a mask-derived bounding box and
+centroid, frame/time/camera telemetry, and intended final geometry. Outputs are
+**original-image pixel JSON**, not geographic GeoJSON. Unity performs projection,
+raycasting and duplicate merging afterwards. No continuous-video tracker is used.
 
-```bash
-docker compose -f docker-compose.uav.yml up -d
-```
-
-### Live mode - poll the API
-
-Polls for newly uploaded videos (`.mp4`/`.mov`) and their `.srt`
-telemetry files, processes each video, and writes one
-GeoJSON per video:
+Start by verifying selection without model weights:
 
 ```bash
-docker exec -e FUTURISED_MEDIA_API_KEY='your-key' triffid_uav_perception bash -c \
-  "PYTHONPATH=/app/src/triffid_uav_perception:/app/src \
-   python -m triffid_uav_perception.uav_node --poll-api \
-       --api-camera Wide --api-poll-interval 30 \
-       --api-download-dir /app/videos --output /app/samples"
+docker compose -f docker-compose.uav.yml up -d --build
+docker exec triffid_uav_perception python -m triffid_uav_perception.uav_node \
+  select /app/videos/flight.mp4 --output /app/samples/selection
 ```
 
-Outputs land in `./uav_samples/<video-stem>_detections.geojson` on the
-host. Add `--post-telesto` to also upload each result to the TELESTO
-backend (off by default).
-
-### Local-file test mode
-
-To verify the module place the mp4 file under
-`./uav_videos/`, with its `.srt`, auto-detected by name):
-
-```bash
-docker exec triffid_uav_perception bash -c \
-  "PYTHONPATH=/app/src/triffid_uav_perception:/app/src \
-   python -m triffid_uav_perception.uav_node /app/videos/flight.mp4 \
-       --output /app/samples"
-```
-
-Key flags (defaults): `--model /app/best.pt`* , `--confidence 0.5`,
-`--stride 5` (every Nth frame), `--sample-seconds 1.0` (each track id
-emitted at most once per second), `--classes id,label,...` (allowlist),
-`--srt path` (override sidecar auto-detect), `--debug-video` (also save
-`<stem>_debug.mp4` with boxes/points/labels drawn on top, for
-`--debug-video-seconds 20` starting at `--debug-video-start 0` — useful
-for eyeballing whether detections look right).
-
-### UAV output schema
-
-One RFC-7946 FeatureCollection per video (`metadata` member: video/model/
-fps/stride/`srt_file`/counts). `geometry` is `Point` or `MultiPoint` in
-**pixel** coordinates (origin top-left) — independent raycast samples, not
-an outline. `drone_*`/`gimbal_*` properties (camera pose for that frame)
-appear only when an SRT sidecar was found. Full schema: [INTERFACE.md](INTERFACE.md).
+See [UAV setup, SANSA supports, CLI and Unity JSON contract](src/triffid_uav_perception/README.md).
+The former UAV YOLO/ByteTrack/pixel-GeoJSON and API-polling CLI has been replaced;
+UGV inference, tracking and delivery are unchanged.
 
 ## Repository layout
 
 ```
 ├── docker-compose.yml / Dockerfile           # UGV container (ROS 2 Humble + CUDA)
 ├── docker-compose.uav.yml / Dockerfile.uav   # UAV container (Python + CUDA torch)
-├── best.pt                                   # shared YOLOv11-seg model (Git LFS)
+├── best.pt                                   # UGV YOLOv11-seg model (Git LFS)
 ├── INTERFACE.md                              # topic/message/GeoJSON/class-list spec
 └── src/
     ├── triffid_ugv_perception/               # ROS 2 package (ugv_node, geojson_bridge, tracker)
-    ├── triffid_uav_perception/               # UAV pipeline (uav_node, srt_metadata, api_client)
-    └── triffid_telesto/                      # TELESTO REST client (used by --post-telesto)
+    ├── triffid_uav_perception/               # modular UAV pipeline + SANSA backend
+    └── triffid_telesto/                      # TELESTO REST client for UGV delivery
 ```
+

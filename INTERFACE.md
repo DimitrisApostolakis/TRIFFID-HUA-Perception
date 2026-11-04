@@ -20,9 +20,9 @@
 `bbox.center.position` = 3D centroid, `bbox.size` = extent, both in `b2/base_link` (X=fwd, Y=left, Z=up).
 `results[0].hypothesis.class_id` = class name (string), `.score` = confidence. `id` = persistent track id (string).
 
-## GeoJSON Feature Schema
+## UGV GeoJSON Feature Schema
 
-Both UGV (`/ugv/detections/front/geojson`) and UAV output use this shape.
+UGV (`/ugv/detections/front/geojson`) output uses this shape.
 
 ```json
 {
@@ -49,25 +49,33 @@ Both UGV (`/ugv/detections/front/geojson`) and UAV output use this shape.
 ```
 
 `stroke*` on Polygon/LineString, `fill*` on Polygon only. `coordinates` are
-`[lon, lat]` (UGV — RFC 7946) or `[x, y]` pixels (UAV — see below).
+`[lon, lat]` (UGV — RFC 7946).
 
-## UAV Feature Differences
+## UAV Unity JSON (v1)
 
-- `geometry.type` is `Point` (1 sample) or `MultiPoint` (multiple independent
-  raycast samples — never `LineString`/`Polygon`, no closure/ordering implied).
-- `coordinates` are pixels in the original frame, origin top-left.
-- `properties` additionally carry `class_id`, `frame_index`, `timestamp_s`,
-  `coordinate_space: "pixel"`, `classes_txt_geometry` (the table below,
-  informational — controls sample count, not `geometry.type`), and, when an
-  SRT sidecar is present: `drone_latitude`, `drone_longitude`,
-  `drone_altitude_m`, `drone_rel_altitude_m`, `gimbal_yaw`, `gimbal_pitch`,
-  `gimbal_roll` (camera pose for that frame, not the detection's position).
-- No `stroke`/`fill`/`local_frame`/`height_m`/`altitude_m`.
+The UAV node now exports `triffid.uav.observations.v1`, **not GeoJSON**:
 
-## Class List (63 classes)
+- `point_detections.json`: 15 point classes in selected MP4/SRT views (8 by default).
+- `polygon_segmentations.json`: 20 polygon classes in a separate top-view image.
+- Both contain exact cropped binary masks with row-major RLE, mask-derived
+  `bbox_xyxy` (maximum exclusive), `centroid_xy`, a foreground `raycast_point_xy`,
+  class identity and intended final `target_geometry`.
+- Coordinates refer to original image pixels, top-left origin, x right/y down.
+- Video records contain frame/time and available camera telemetry. Top-view
+  records carry optional external projection context. No object world positions
+  or camera intrinsics are inferred by perception.
+- Person (ID 23) merges original IDs 6, 23 and 43. Debris is a **Point** class.
+- Observation IDs are local to a document, not persistent cross-view object IDs.
+- Unity performs world projection and duplicate merging before generating final GeoJSON.
 
-`Geometry` is the point/line/polygon rule from the table below: it decides
-sample-point count for the UAV pipeline and geometry type for the UGV bridge.
+Full schema, RLE decoding and examples:
+[UAV interface documentation](src/triffid_uav_perception/README.md#unity-json-contract).
+The old Point/MultiPoint pixel-GeoJSON UAV format and CLI are retired.
+
+## Original UGV Class List (63 classes)
+
+`Geometry` below is the existing UGV rule. The reduced UAV class list and
+geometry rules are documented separately in the UAV README.
 
 | ID | Class | Category | Geometry |
 |---|---|---|---|
@@ -140,3 +148,4 @@ sample-point count for the UAV pipeline and geometry type for the UGV bridge.
 `https://crispres.com/wp-json/map-manager/v1/features` — `GET` (list),
 `PUT` (create, body `{"geometry", "properties"}`, returns server `id`),
 `PATCH /features/{id}` (update), `DELETE /features/{id}`.
+
