@@ -135,6 +135,10 @@ with `bank add`, then check them with `bank validate`. All backends receive the
 same ordered supports; `--shots 5` is the default and `--shots 1` uses the first.
 Use `detect-frames selected_frames.json` to infer already-exported frames without
 reopening the video. A 1-shot test can run while slots 2–5 are still unfilled.
+
+Inspect results with `python -m triffid_uav_perception.visualize path/to/point_detections.json`.
+The offline debugger writes per-frame mask/box/centroid overlays, an eight-view
+contact sheet, an HTML gallery and an observation-ID summary alongside the JSON.
 The former UAV YOLO/ByteTrack/pixel-GeoJSON and API-polling CLI has been replaced;
 UGV inference, tracking and delivery are unchanged.
 

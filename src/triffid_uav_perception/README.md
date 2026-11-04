@@ -303,7 +303,50 @@ Host mounts: `uav_videos` -> `/app/videos`, `uav_data` -> `/app/uav_data`,
 to infer. The SANSA source directory is writable because its official builder may
 create Python cache files; model weights are explicit local files.
 
-## Validation
+## Visual detection debugger
+
+After inference, render all saved observations without rerunning SANSA:
+
+```bash
+python -m triffid_uav_perception.visualize \
+  uav_samples/merged_cut_detections/point_detections.json
+```
+
+By default the output directory is `debug/` next to the JSON. It contains:
+
+- `00_overlay.png`, `01_overlay.png`, etc.: masks, exclusive-maximum boxes,
+  centroid crosses and numbered class/score labels drawn on each source frame.
+- `contact_sheet.jpg`: up to four views per row (the default eight views in two rows).
+- `index.html`: offline browser gallery with clickable larger previews.
+- `summary.json`: per-frame class counts and a mapping from displayed numbers
+  to original observation IDs, areas, boxes, centroids and score semantics.
+
+Civilian vehicles are cyan; windows are orange. Colors stay consistent across
+frames. `p` is mean foreground probability, not calibrated detection confidence.
+All observations are shown by default, including tiny components. The debugger
+does not modify source images or detection JSON, filter inference results or
+perform duplicate merging. It needs only the existing OpenCV/NumPy dependencies.
+It also supports `polygon_segmentations.json` from the top-view command.
+
+Optional controls:
+
+```bash
+# Only windows; suppress tiny regions in the preview, leaving results unchanged.
+python -m triffid_uav_perception.visualize \
+  uav_samples/merged_cut_detections/point_detections.json \
+  --output uav_samples/debug_windows --classes window --min-area-px 100
+```
+
+Use `--alpha 0.3` to reduce mask opacity, `--max-width 0` for original-resolution
+previews (default maximum width 1920), or `--no-labels`, `--no-masks`, `--no-boxes`,
+`--no-centroids` to simplify the display. PNG dimensions do not change until the
+optional final display resize. Source images must retain their original dimensions.
+`--image-root /path/to/frames` relocates the source images by their exact basenames
+if the paths recorded in the JSON are no longer accessible. Files are never
+matched fuzzily. Open `index.html` or `contact_sheet.jpg` to inspect the results;
+no display server or OpenCV GUI is needed, including under WSL.
+
+## Validation checks
 
 ```bash
 python -m pytest -q src/triffid_uav_perception/tests
