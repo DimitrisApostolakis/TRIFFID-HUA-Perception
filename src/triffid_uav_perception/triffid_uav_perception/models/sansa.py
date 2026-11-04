@@ -14,7 +14,6 @@ import cv2
 import numpy as np
 
 from .base import ClassPrediction
-from ..supports import SupportBank
 
 
 @contextlib.contextmanager
@@ -28,7 +27,7 @@ def _working_directory(path):
 
 
 class SansaBackend:
-    def __init__(self, repo, checkpoint, sam2_checkpoint, support_manifest,
+    def __init__(self, repo, checkpoint, sam2_checkpoint,
                  device='cuda', image_size=640, threshold=0.5):
         self.repo = Path(repo).resolve()
         self.checkpoint = Path(checkpoint).resolve()
@@ -38,12 +37,12 @@ class SansaBackend:
                 raise ValueError(f'SANSA dependency not found: {path}')
         if image_size < 1 or not 0 < threshold < 1:
             raise ValueError('Invalid SANSA image size or threshold')
-        self.bank = SupportBank(support_manifest)
         self.device_name, self.image_size, self.threshold = device, image_size, threshold
         self._prepared = {}
         self.model = None
 
-    def prepare(self, classes):
+    def prepare(self, classes, supports):
+        supports.require_classes(classes)
         # Validate/resize supports before allocating model weights. Cache CPU
         # tensors, not entire full-resolution reference images on the GPU.
         import torch
@@ -51,9 +50,10 @@ class SansaBackend:
         if self.device_name.startswith('cuda') and not torch.cuda.is_available():
             raise ValueError('CUDA unavailable; select --device cpu or install a CUDA PyTorch build')
         self.device = torch.device(self.device_name)
+        self._prepared.clear()
         for item in classes:
             images, masks = [], []
-            for support in self.bank.for_class(item):
+            for support in supports.for_class(item):
                 image, mask = support.load()
                 images.append(self._image_tensor(image))
                 mask = cv2.resize(mask, (self.image_size, self.image_size), interpolation=cv2.INTER_NEAREST)
@@ -119,7 +119,7 @@ class SansaBackend:
                 yield ClassPrediction(item.id, probabilities > self.threshold, probabilities)
 
     def metadata(self):
-        return {'name': 'sansa_universal', 'source_repository': 'https://github.com/ClaudiaCuttano/SANSA',
+        return {'name': 'sansa', 'source_repository': 'https://github.com/ClaudiaCuttano/SANSA',
                 'reference_revision': 'f562b5642940e08a57e3da2608b804b99af3763b',
                 'checkpoint': self.checkpoint.name, 'sam2_checkpoint': self.sam2_checkpoint.name,
                 'image_size': self.image_size, 'threshold': self.threshold,

@@ -1,12 +1,10 @@
 """Exercise real torch tensors/checkpoint loading with a stub official forward.
 This verifies our adapter, not SANSA model quality or real-checkpoint compatibility.
 """
-import json
 from pathlib import Path
 import sys
 import types
 
-import cv2
 import numpy as np
 import pytest
 
@@ -40,7 +38,7 @@ class OfficialForwardStub(torch.nn.Module):
 
 
 @pytest.mark.parametrize('shots', [1, 5])
-def test_sansa_support_query_contract(tmp_path, monkeypatch, shots):
+def test_sansa_support_query_contract(tmp_path, monkeypatch, shots, bank_selection):
     repo = tmp_path / 'SANSA'
     source = repo / 'models/sansa/sansa.py'
     source.parent.mkdir(parents=True)
@@ -50,15 +48,6 @@ def test_sansa_support_query_contract(tmp_path, monkeypatch, shots):
     model = OfficialForwardStub(shots)
     checkpoint = tmp_path / 'universal.pth'
     torch.save({'model': model.state_dict()}, checkpoint)
-    image = np.full((20, 30, 3), 128, np.uint8)
-    mask = np.zeros((20, 30), np.uint8)
-    mask[4:16, 5:25] = 255
-    cv2.imwrite(str(tmp_path / 'support.png'), image)
-    cv2.imwrite(str(tmp_path / 'mask.png'), mask)
-    supports = tmp_path / 'supports.json'
-    pair = {'image': 'support.png', 'mask': 'mask.png'}
-    supports.write_text(json.dumps({'schema_version': 'triffid.uav.supports.v1',
-                                    'classes': {'debris': [pair] * shots, 'person': [pair] * shots}}))
     paths = types.ModuleType('util.path_utils')
     paths.SAM2_PATHS_CONFIG = {'large': ('old.pt', 'config.yaml')}
     builder = types.ModuleType('models.sansa.sansa')
@@ -76,9 +65,10 @@ def test_sansa_support_query_contract(tmp_path, monkeypatch, shots):
     old_path = sys.path[:]
     original_cwd = Path.cwd()
     try:
-        backend = SansaBackend(repo, checkpoint, base, supports, device='cpu', image_size=16)
+        backend = SansaBackend(repo, checkpoint, base, device='cpu', image_size=16)
         classes = classes_for('Point', 'debris,person')
-        backend.prepare(classes)
+        supports = bank_selection(classes, shots)
+        backend.prepare(classes, supports)
         assert Path.cwd() == original_cwd
         assert paths.SAM2_PATHS_CONFIG['large'] == ('old.pt', 'config.yaml')
         assert len(builds) == 1

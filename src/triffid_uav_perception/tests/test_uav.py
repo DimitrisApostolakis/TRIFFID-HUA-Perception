@@ -153,21 +153,26 @@ def test_support_manifest_relative_paths_multiclass_mask(tmp_path):
     mask[4, 4] = 14
     cv2.imwrite(str(tmp_path / 'mask.png'), mask)
     path = tmp_path / 'supports.json'
-    data = {'schema_version': 'triffid.uav.supports.v1', 'classes': {
-        'debris': [{'image': 'rgb.png', 'mask': 'mask.png', 'foreground_value': 16}]}}
+    entries = []
+    for i in range(5):
+        cv2.imwrite(str(tmp_path / f'rgb_{i}.png'), np.full((5, 5, 3), i, np.uint8))
+        entries.append({'image': f'rgb_{i}.png', 'mask': 'mask.png', 'foreground_value': 16})
+    data = {'schema_version': 'triffid.uav.supports.v1', 'classes': {'debris': entries}}
     path.write_text(json.dumps(data))
     support = SupportBank(path).for_class(BY_ID[16])[0]
     _, foreground = support.load()
     assert foreground.sum() == 4
-    with pytest.raises(ValueError, match='exactly 1 or 5'):
+    with pytest.raises(ValueError, match='exactly 5'):
         SupportBank(path).for_class(BY_ID[23])
 
 
 class FakeBackend:
     def __init__(self):
         self.calls = 0
-    def prepare(self, classes):
+    def prepare(self, classes, supports):
         self.classes = tuple(classes)
+        supports.require_classes(classes)
+        self.support_ids = {item.name: [s.example_id for s in supports.for_class(item)] for item in classes}
     def predict(self, rgb, classes):
         self.calls += 1
         mask = np.zeros(rgb.shape[:2], bool)
@@ -195,15 +200,18 @@ def synthetic_flight(tmp_path):
     return video, srt
 
 
-def test_video_to_unity_json_end_to_end(synthetic_flight, tmp_path):
+def test_video_to_unity_json_end_to_end(synthetic_flight, tmp_path, bank_selection):
     video, srt = synthetic_flight
     backend = FakeBackend()
-    output = detect_video(video, srt, tmp_path / 'run', backend, classes_for('Point', 'debris,person'))
+    classes = classes_for('Point', 'debris,person')
+    output = detect_video(video, srt, tmp_path / 'run', backend, classes, supports=bank_selection(classes))
     result = json.loads(output.read_text())
     assert backend.calls == 8
     assert len(result['sources']) == 8
     assert result['coordinate_space'] == 'original_image_pixels'
     assert result['task'] == 'point_detections'
+    assert result['support_bank']['shots'] == 5
+    assert [s['example_id'] for s in result['support_bank']['classes']['person']] == backend.support_ids['person']
     ids = []
     for source in result['sources']:
         frame = cv2.imread(str(output.parent / source['image_file']))
@@ -224,14 +232,15 @@ def test_selection_only_needs_no_model(synthetic_flight, tmp_path):
     assert len(json.loads(output.read_text())['sources']) == 8
 
 
-def test_top_view_is_separate_polygon_task(tmp_path):
+def test_top_view_is_separate_polygon_task(tmp_path, bank_selection):
     image = tmp_path / 'top.png'
     cv2.imwrite(str(image), np.zeros((32, 64, 3), np.uint8))
     projection = tmp_path / 'projection.json'
     projection.write_text('{"projection_name":"test"}')
     backend = FakeBackend()
-    output = segment_top_view(image, tmp_path / 'top_run', backend,
-                              classes_for('Polygon', 'road,water'), projection_json=projection)
+    classes = classes_for('Polygon', 'road,water')
+    output = segment_top_view(image, tmp_path / 'top_run', backend, classes,
+                              supports=bank_selection(classes), projection_json=projection)
     result = json.loads(output.read_text())
     assert backend.calls == 1
     assert result['task'] == 'polygon_segmentation'

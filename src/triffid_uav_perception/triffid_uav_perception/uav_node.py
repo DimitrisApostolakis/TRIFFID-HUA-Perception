@@ -1,5 +1,6 @@
 """UAV CLI: angular selection, point detection and top-view segmentation."""
 import argparse
+import json
 import logging
 
 from .ontology import classes_for
@@ -26,9 +27,12 @@ def _video_options(parser):
 def _model_options(parser):
     parser.add_argument('--backend', choices=['sansa'], default='sansa')
     parser.add_argument('--sansa-repo', required=True, help='Local official SANSA checkout')
-    parser.add_argument('--checkpoint', required=True, help='SANSA universal checkpoint')
+    parser.add_argument('--checkpoint', required=True, help='SANSA Generalist/Universal checkpoint (channel factor 0.8)')
     parser.add_argument('--sam2-checkpoint', required=True, help='Original SAM2 Hiera Large base weights')
-    parser.add_argument('--supports', required=True, help='Per-class support manifest JSON')
+    parser.add_argument('--support-bank', '--supports', dest='support_bank', default='uav_supports',
+                        help='Shared bank directory or manifest JSON (default: uav_supports)')
+    parser.add_argument('--shots', type=int, choices=[1, 5], default=5,
+                        help='Use first 1 or all 5 bank examples per class (default: 5)')
     parser.add_argument('--device', default='cuda', help='cuda, cuda:0, or cpu')
     parser.add_argument('--image-size', type=int, default=640)
     parser.add_argument('--threshold', type=float, default=0.5)
@@ -41,6 +45,20 @@ def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('-v', '--verbose', action='store_true')
     commands = parser.add_subparsers(dest='command', required=True)
+    bank = commands.add_parser('bank', help='Manage the shared five-example-per-class support bank')
+    bank_commands = bank.add_subparsers(dest='bank_command', required=True)
+    initialize = bank_commands.add_parser('init', help='Create 35 class entries with 5 empty slots each')
+    initialize.add_argument('--bank', default='uav_supports', help='Bank directory to create')
+    validate = bank_commands.add_parser('validate', help='Check all five examples per requested class')
+    validate.add_argument('--bank', default='uav_supports', help='Bank directory or manifest JSON')
+    validate.add_argument('--classes', help='Optional class names/IDs; defaults to all 35 UAV classes')
+    add = bank_commands.add_parser('add', help='Add a labelled image/mask pair to one unoccupied slot')
+    add.add_argument('--bank', default='uav_supports')
+    add.add_argument('--class', dest='class_name', required=True)
+    add.add_argument('--slot', type=int, choices=range(1, 6), required=True)
+    add.add_argument('--image', required=True)
+    add.add_argument('--mask', required=True)
+    add.add_argument('--foreground-value', type=int, help='Target label value for indexed multiclass masks')
     select = commands.add_parser('select', help='Export angularly selected frames without loading a model')
     _video_options(select)
     detect = commands.add_parser('detect', help='Segment point-class objects in selected video views')
@@ -60,6 +78,21 @@ def main(argv=None):
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format='%(levelname)s %(name)s: %(message)s')
     try:
+        if args.command == 'bank':
+            from .supports import SupportBank, resolve_class, add_example, initialize_bank
+            from .ontology import CLASSES
+            if args.bank_command == 'init':
+                print(initialize_bank(args.bank))
+            elif args.bank_command == 'add':
+                print(add_example(args.bank, args.class_name, args.slot, args.image,
+                                  args.mask, args.foreground_value))
+            else:
+                classes = tuple(dict.fromkeys(resolve_class(v) for v in args.classes.split(','))) if args.classes else CLASSES
+                report = SupportBank(args.bank).validate(classes)
+                print(json.dumps(report, indent=2))
+                if not report['valid']:
+                    parser.exit(2)
+            return
         from .pipeline import detect_video, segment_top_view, select_video_frames
         if args.command != 'segment-top-view':
             selection = dict(mode=args.selection_mode, views=args.views, start_s=args.start_seconds,
@@ -73,15 +106,17 @@ def main(argv=None):
                 raise ValueError('--min-area-px must be positive')
             geometry = 'Point' if args.command == 'detect' else 'Polygon'
             classes = classes_for(geometry, args.classes)
+            from .supports import SupportBank
+            supports = SupportBank(args.support_bank).select(classes, shots=args.shots)
             from .models.sansa import SansaBackend
             backend = SansaBackend(args.sansa_repo, args.checkpoint, args.sam2_checkpoint,
-                                   args.supports, args.device, args.image_size, args.threshold)
+                                   args.device, args.image_size, args.threshold)
             if args.command == 'detect':
                 result = detect_video(args.video, args.srt, args.output, backend, classes,
-                                      min_area_px=args.min_area_px, **selection)
+                                      supports=supports, min_area_px=args.min_area_px, **selection)
             else:
                 result = segment_top_view(args.image, args.output, backend, classes,
-                                          projection_json=args.projection_json,
+                                          supports=supports, projection_json=args.projection_json,
                                           min_area_px=args.min_area_px)
     except (ValueError, OSError, ImportError) as error:
         parser.exit(2, f'UAV error: {error}\n')

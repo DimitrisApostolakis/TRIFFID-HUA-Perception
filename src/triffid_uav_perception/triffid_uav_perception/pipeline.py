@@ -63,9 +63,10 @@ def infer_source(backend, rgb, classes, source, min_area_px):
     log.info('%s: %s observations', source['source_id'], len(source['observations']))
 
 
-def detect_video(video, srt, output_dir, backend, classes, *, min_area_px=1, **selection):
+def detect_video(video, srt, output_dir, backend, classes, *, supports, min_area_px=1, **selection):
     info, srt_path, views, settings = prepare_views(video, srt, selection)
-    backend.prepare(classes)
+    supports.require_classes(classes)
+    backend.prepare(classes, supports)
     sources = []
     output_dir = Path(output_dir)
     with VideoReader(video) as reader:
@@ -79,22 +80,25 @@ def detect_video(video, srt, output_dir, backend, classes, *, min_area_px=1, **s
             sources.append(source)
     payload = document('point_detections', sources, backend.metadata(), classes)
     payload.update({'video': info.to_dict(), 'srt_file': str(srt_path), 'selection': settings,
+                    'support_bank': supports.metadata(),
                     'postprocessing': {'min_area_px': min_area_px, 'connectivity': 8}})
     return write_json(output_dir / 'point_detections.json', payload)
 
 
-def segment_top_view(image, output_dir, backend, classes, *, projection_json=None, min_area_px=1):
+def segment_top_view(image, output_dir, backend, classes, *, supports, projection_json=None, min_area_px=1):
     rgb = read_rgb(image)
     projection = None
     if projection_json:
         projection = json.loads(Path(projection_json).read_text())
         if not isinstance(projection, dict):
             raise ValueError('Top-view projection context must be a JSON object')
-    backend.prepare(classes)
+    supports.require_classes(classes)
+    backend.prepare(classes, supports)
     source = {'source_id': 'top_view', 'source_type': 'top_view_image',
               'image_file': str(Path(image).resolve()), 'width': rgb.shape[1], 'height': rgb.shape[0],
               'projection_context': projection, 'observations': []}
     infer_source(backend, rgb, classes, source, min_area_px)
     payload = document('polygon_segmentation', [source], backend.metadata(), classes)
+    payload['support_bank'] = supports.metadata()
     payload['postprocessing'] = {'min_area_px': min_area_px, 'connectivity': 8}
     return write_json(Path(output_dir) / 'polygon_segmentations.json', payload)

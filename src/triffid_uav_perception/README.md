@@ -1,10 +1,11 @@
 # UAV perception: selected views + SANSA + Unity JSON
 
-The UAV node has three independent commands:
+The UAV node has three perception commands plus shared support-bank management:
 
 1. `select`: MP4 + DJI SRT -> angularly selected PNG frames and a selection manifest.
 2. `detect`: MP4 + DJI SRT + visual supports -> point-class observations in those views.
 3. `segment-top-view`: one supplied top-view RGB image + visual supports -> polygon-class masks.
+4. `bank init/add/validate`: create, fill and check the model-independent support bank.
 
 The node exports **pixel observations**, not geographic GeoJSON. Unity is responsible
 for camera projection, raycasting, geographic conversion and cross-view deduplication.
@@ -31,37 +32,97 @@ git clone https://github.com/ClaudiaCuttano/SANSA uav_models/SANSA
 git -C uav_models/SANSA checkout f562b5642940e08a57e3da2608b804b99af3763b
 ```
 
-Download the **SANSA Universal** weights and original **SAM2 Hiera Large** base
-weights using the official SANSA README. Supply both local paths explicitly;
-the adapter does not auto-download them. This backend uses the universal model
-(`channel_factor=0.8`, stages 2/3), not a COCO-fold/FSS benchmark checkpoint.
+Use the **SANSA Generalist** or **SANSA Universal** checkpoint and original
+**SAM2 Hiera Large** base weights from the official SANSA README. Supply both
+local paths explicitly; the adapter does not auto-download them. Both supported
+checkpoints use `channel_factor=0.8`, stages 2/3, and mask prompts in this backend.
+Do not use a COCO-fold/FSS benchmark checkpoint with different architecture settings.
 Official reference: <https://github.com/ClaudiaCuttano/SANSA#1-sansa-universal-model->.
 Reference runtime: torch 2.7.1 + torchvision 0.22.1. The Docker image uses CUDA 12.6;
 native CPU execution is available via `--device cpu` with a CPU PyTorch installation.
 
-### Support images and masks
+## Shared support bank: five examples per class
 
-Copy `examples/supports.template.json` into `uav_supports/supports.json`, and replace
-its placeholder paths with your labelled examples. Paths are relative to the manifest.
-Every **requested** class needs exactly **1 or 5** support image/mask pairs. A subset
-can be run with `--classes "debris,person"`; unused classes need no supports.
+One bank is shared across all models and both UAV tasks. It stores **35 classes x
+5 distinct image/mask pairs = 175 examples**. The bank stores raw labelled data;
+model checkpoints and model-specific feature caches are separate. New backends
+receive a `SupportSelection` through `prepare(classes, supports)` and do not
+select their own files or maintain a separate support manifest.
 
-```json
-{
-  "schema_version": "triffid.uav.supports.v1",
-  "classes": {
-    "debris": [{"image": "images/debris.jpg", "mask": "masks/debris.png"}],
-    "person": [{"image": "images/person.jpg", "mask": "masks/person.png"}]
-  }
-}
+### Create the bank
+
+```bash
+python -m triffid_uav_perception.uav_node bank init --bank uav_supports
 ```
 
-Masks must be single-channel, match their reference image dimensions, and contain
-foreground. For binary masks every nonzero pixel is foreground. For an indexed
-multiclass mask specify `"foreground_value": 16` (or its actual pixel value) to
-avoid treating other labelled classes as foreground. RGB colour-coded masks must
-first be converted to binary/indexed masks. Person supports may show citizens,
-first responders or military personnel; the output does not infer those roles.
+This creates `bank.json` and class directories. The manifest reserves five slots
+per class, referencing `person/01/image.png`, `person/01/mask.png`, through slot
+`05`, and similarly for each other class (spaces become underscores in folders).
+No dummy images or masks are generated: these slots still need your annotations.
+The bank can live outside the repository, e.g. `/mnt/d/Models/SupportBank/UAV`.
+
+### Add a real example
+
+```bash
+python -m triffid_uav_perception.uav_node bank add \
+  --bank uav_supports --class person --slot 1 \
+  --image /path/to/person_reference.jpg --mask /path/to/person_mask.png
+```
+
+Repeat for slots **1 through 5** for each class. `bank add` copies the RGB image
+and normalizes the mask to a lossless binary PNG (0 background, 255 foreground).
+It validates shape/foreground and never overwrites an existing slot. You can also
+place your own PNG pairs directly at the manifest paths. Empty directories are
+not considered populated slots.
+
+For an indexed multiclass mask, add `--foreground-value 23` (or the actual target
+label value). Without it **all nonzero pixels** count as foreground, so only use
+that default for already-binary masks. Masks must be single-channel and match the
+reference image dimensions. RGB colour-coded masks need conversion first. Person
+references can show citizens, first responders or military personnel; the model
+receives one Person class rather than inferring those roles.
+
+### Validate
+
+```bash
+python -m triffid_uav_perception.uav_node bank validate --bank uav_supports
+```
+
+The report checks the full 175-example bank and lists all missing/invalid slots.
+It rejects duplicate example IDs, repeated image paths, duplicate image-file
+content within a class, empty masks, wrong sizes and non-grayscale masks. It exits
+with code 2 if invalid. To start with a smaller test subset:
+
+```bash
+python -m triffid_uav_perception.uav_node bank validate \
+  --bank uav_supports --classes "debris,person"
+```
+
+Detection validates only its requested point classes; top-view segmentation only
+its requested polygon classes. A subset such as `--classes "debris,person"` needs
+five populated examples for each of those classes, not the rest of the bank.
+
+### Retrieval and reproducibility
+
+Use `--support-bank uav_supports` (the default) on either inference command.
+`--shots 5` retrieves all five examples per class. `--shots 1` deterministically
+retrieves the first example, while the bank still stores and validates all five.
+No random sampling or duplication is used to fill missing examples. All classes
+in one run use the same shot count. A bank directory or an explicit manifest path
+is accepted; relative asset paths resolve against the manifest, not the shell's
+working directory. `--supports` remains an alias for `--support-bank`.
+
+The pipeline selects the example identities once, then injects the same selection
+into the backend. SANSA only applies its own resizing, normalization and prompt
+formatting. The JSON output's `support_bank` member records bank/asset SHA-256
+hashes, selected example IDs, shot count and ordering policy so the supports used
+by different models can be compared. Raw images are not cached permanently in RAM;
+SANSA caches only its resized support tensors for the current run.
+
+`examples/supports.template.json` contains the complete managed bank manifest if
+you prefer to prepare files manually. Legacy `triffid.uav.supports.v1` manifests
+are still accepted **only with five distinct valid pairs per requested class**;
+expand old single-example manifests, then use `--shots 1` for 1-shot inference.
 
 ## Selecting the eight views
 
@@ -105,7 +166,7 @@ python -m triffid_uav_perception.uav_node detect uav_videos/flight.mp4 \
   --sansa-repo uav_models/SANSA \
   --checkpoint uav_models/sansa_universal.pth \
   --sam2-checkpoint uav_models/sam2_hiera_large.pt \
-  --supports uav_supports/supports.json --device cuda
+  --support-bank uav_supports --shots 5 --device cuda
 ```
 
 Outputs: `point_detections.json` and `frames/view_00.png` through `view_07.png`.
@@ -133,7 +194,7 @@ python -m triffid_uav_perception.uav_node segment-top-view uav_data/top_view.png
   --sansa-repo uav_models/SANSA \
   --checkpoint uav_models/sansa_universal.pth \
   --sam2-checkpoint uav_models/sam2_hiera_large.pt \
-  --supports uav_supports/supports.json --device cuda
+  --support-bank uav_supports --shots 5 --device cuda
 ```
 
 Output: `polygon_segmentations.json`. `--projection-json path.json` optionally
@@ -158,7 +219,8 @@ coordinates; no pixel coordinates are mislabelled as longitude/latitude GeoJSON.
 
 Schema version: `triffid.uav.observations.v1`. Coordinates are original image pixels,
 origin top-left, x right, y down. The envelope contains task, class catalogue,
-backend settings, sources and (for video) selection/video/SRT metadata.
+backend settings, shared support-bank provenance, sources and (for video)
+selection/video/SRT metadata.
 
 Each source contains original width/height and observations. Video sources also
 contain zero-based frame index, timestamp, selected/actual angle, SRT telemetry
@@ -217,6 +279,8 @@ python -m pytest -q src/triffid_uav_perception/tests
 ```
 
 Tests cover class/geometry decisions, angular selection and wraparound, two-pitch
-selection, low-rate SRT, missing targets, mask holes/centroids/boxes/RLE, supports,
+selection, low-rate SRT, missing targets, mask holes/centroids/boxes/RLE, support banks,
 atomic output, and synthetic-video/top-view end-to-end export with an injected backend.
+Bank tests additionally check all 175 slots, add/validate commands, duplicate images,
+model-independent retrieval, deterministic 1/5-shot selection and asset hashes.
 Real SANSA weights and CUDA inference require the local assets described above.

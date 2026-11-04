@@ -111,7 +111,7 @@ ros2 launch triffid_ugv_perception ugv_perception.launch.py \
 ## 2. UAV Module
 
 The UAV node selects eight angular views from MP4 + DJI SRT telemetry, then
-runs **SANSA Universal** with labelled support images/masks for the **15 point
+runs **SANSA** with a shared five-example-per-class support bank for the **15 point
 classes**. A separate top-view image is segmented for the **20 polygon classes**.
 Debris is a point class; Citizen/First responder/Military personnel become Person.
 
@@ -129,6 +129,10 @@ docker exec triffid_uav_perception python -m triffid_uav_perception.uav_node \
 ```
 
 See [UAV setup, SANSA supports, CLI and Unity JSON contract](src/triffid_uav_perception/README.md).
+Create the bank with `python -m triffid_uav_perception.uav_node bank init`.
+It defines 35 classes x 5 example slots (175 pairs). Add real labelled examples
+with `bank add`, then check them with `bank validate`. All backends receive the
+same ordered supports; `--shots 5` is the default and `--shots 1` uses the first.
 The former UAV YOLO/ByteTrack/pixel-GeoJSON and API-polling CLI has been replaced;
 UGV inference, tracking and delivery are unchanged.
 

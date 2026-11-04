@@ -66,6 +66,9 @@ The UAV node now exports `triffid.uav.observations.v1`, **not GeoJSON**:
   or camera intrinsics are inferred by perception.
 - Person (ID 23) merges original IDs 6, 23 and 43. Debris is a **Point** class.
 - Observation IDs are local to a document, not persistent cross-view object IDs.
+- `support_bank` records the shared bank manifest hash, shot count, selection
+  policy, example IDs and image/mask SHA-256 hashes used for each class. These
+  identities are selected by the pipeline before model-specific preprocessing.
 - Unity performs world projection and duplicate merging before generating final GeoJSON.
 
 Full schema, RLE decoding and examples:
