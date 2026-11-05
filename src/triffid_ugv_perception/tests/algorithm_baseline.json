@@ -1,0 +1,165 @@
+{
+  "source_revision": "b1a41ed46e3f50847b9c1c0cb6d0357c7c5dbc36",
+  "checks": [
+    {
+      "path": "geometry.py",
+      "name": "sample_depth_for_detection",
+      "sha256": "63d0d80c8313d8500bd15eda63fdb2ec2a6d96c7b4ad3f3cec07b54d5850a5f9"
+    },
+    {
+      "path": "geometry.py",
+      "name": "camera_to_base",
+      "sha256": "6df8b5dc8ccdef7296424d99bfb9f852ecc5f77206116b19de34a7fb47bf7fd3"
+    },
+    {
+      "path": "geometry.py",
+      "name": "camera_to_base_batch",
+      "sha256": "32d768f85b1f04b6645751741ab793c0249aab73243eb4ef3f2ffbea656c7ccd"
+    },
+    {
+      "path": "geometry.py",
+      "name": "bbox_to_3d_corners",
+      "sha256": "ed49c5587c7a470217f05f1c578abb9c8c206e855a21c6c46831c5489a5ea3d7"
+    },
+    {
+      "path": "geometry.py",
+      "name": "nms_3d",
+      "sha256": "283b364684310da31b2b2d8ae11b94231cd8fe4ae5a9062ff0d852ead0f4397e"
+    },
+    {
+      "path": "position.py",
+      "name": "PositionProvider._valid_lat_lon",
+      "sha256": "8d200741fff2e109dd598a9f042deb665c43f38a71c5d0efb43e5c7acf701e6d"
+    },
+    {
+      "path": "position.py",
+      "name": "PositionProvider._select_position_locked",
+      "sha256": "f240993d48c5d3ef365e9d96b250c74c7b58fa05b56b0caf54ce39946cd4a877"
+    },
+    {
+      "path": "position.py",
+      "name": "PositionProvider.ugv_status_callback",
+      "sha256": "5cbc8567e79d311f83dd85f4bf09f505eb480344973501baac1e2bb57b87cfd0"
+    },
+    {
+      "path": "position.py",
+      "name": "PositionProvider._check_ugv_status_freshness",
+      "sha256": "11ffa3ac64597305ade0928b933bc2a81520040f2ba0c9ad972fc9bef1c36e3c"
+    },
+    {
+      "path": "position.py",
+      "name": "PositionProvider._position_api_worker_loop",
+      "sha256": "af797c878b362b5012f00aec9aa53ad226260aa3ba54496359b2beaa49757df3"
+    },
+    {
+      "path": "position.py",
+      "name": "PositionProvider.gps_callback",
+      "sha256": "596ed522b277f8c6f31ae5ba48cbe32454cd5645c354afeb9641b8e873951b2c"
+    },
+    {
+      "path": "position.py",
+      "name": "PositionProvider.heading_callback",
+      "sha256": "b593b144c351f76de1754524fa14431f06b8e5989f3afa6eb6c4213aacfaf4f2"
+    },
+    {
+      "path": "position.py",
+      "name": "PositionProvider._body_to_enu",
+      "sha256": "7551f7906a31cf5f835eb7d0c41ce6b8a0a69e031fc0daf9e47f8f6c350bc828"
+    },
+    {
+      "path": "position.py",
+      "name": "PositionProvider.body_to_gps",
+      "sha256": "9bb54c837472e9d80f8ea5acf946b6d6119acff5a515d99df8cabbb2e1b25e6f"
+    },
+    {
+      "path": "tracking/kalman.py",
+      "name": "_KalmanBBox.__init__",
+      "sha256": "60e40eeabbff0db1eaf19ea9f3e5c71716998e7d75e279c34bc36768e59b82d1"
+    },
+    {
+      "path": "tracking/kalman.py",
+      "name": "_KalmanBBox.predict",
+      "sha256": "0477d308681d6b1e7292eb9d7bb48532e79af223b7e2dd5f4dd66ede0df571b2"
+    },
+    {
+      "path": "tracking/kalman.py",
+      "name": "_KalmanBBox.update",
+      "sha256": "a4f02982b741237264ab9903f6502910d1766027e297ca39d9c1fb9f75f814d2"
+    },
+    {
+      "path": "tracking/kalman.py",
+      "name": "_KalmanBBox._state_to_bbox",
+      "sha256": "59ef7e43dcf36736956b85198942d2804002d919ba25fb2d498180cb49ce4217"
+    },
+    {
+      "path": "tracking/kalman.py",
+      "name": "_KalmanBBox._bbox_to_measurement",
+      "sha256": "97fc1999b7239f9865f01f38d628db6d665bd56097e4e15c8273fdb4e294e74a"
+    },
+    {
+      "path": "tracking/state.py",
+      "name": "_Track.__init__",
+      "sha256": "037da20fa979adda7ca58fbb68af030dee5c9ccb34de15aa0ebce4b072d55017"
+    },
+    {
+      "path": "tracking/state.py",
+      "name": "_Track.is_confirmed",
+      "sha256": "85440f242deb1a6609aa7656c30f6b67599042fc6db02611443dda644f2ef527"
+    },
+    {
+      "path": "tracking/state.py",
+      "name": "_Track.is_lost",
+      "sha256": "13e9d818e7ee22d2ab1f4f8cf99c4f17a43e30d0c00de4abac0b37293d529d9f"
+    },
+    {
+      "path": "tracking/state.py",
+      "name": "_Track.predict",
+      "sha256": "5b4a7f8a3573c18ba44734c29ddba8ab309226194a025d30a0a0f50873b35b77"
+    },
+    {
+      "path": "tracking/state.py",
+      "name": "_Track.update",
+      "sha256": "0c7506f5ca8d06c8e8fc8d5ae743182468266c6b089dae54826520522c2fa05d"
+    },
+    {
+      "path": "tracking/state.py",
+      "name": "_Track.mark_lost",
+      "sha256": "e41b0bef359d237c59fb3a464882bf28c4110c0d1c12d7abe9ef96a1563cb0cc"
+    },
+    {
+      "path": "tracker.py",
+      "name": "ByteTracker.__init__",
+      "sha256": "0e3cd5c0c10699367176a5f13b354a5103e87f30e808b5646f37d0dcfc365f79"
+    },
+    {
+      "path": "tracker.py",
+      "name": "ByteTracker.update",
+      "sha256": "750970886c3e566b8ccc67dec3919f4f61ffcaa5fa519bf71a26967520f65f94"
+    },
+    {
+      "path": "tracker.py",
+      "name": "ByteTracker._associate",
+      "sha256": "6a03af5f63f426559b230d53dc20ee729ee2d554cc05584d876098b635a0d6a7"
+    },
+    {
+      "path": "tracker.py",
+      "name": "ByteTracker._greedy_assignment",
+      "sha256": "eceebb2ce3bfaa593d4f195151cede7cee7c7180152bdd9d8499ffc587650ccb"
+    },
+    {
+      "path": "tracker.py",
+      "name": "ByteTracker._create_track",
+      "sha256": "25615a21e758d8146fb777d59fc8f6ceb9b4530d5223b8827d9d01aa341026d9"
+    },
+    {
+      "path": "tracker.py",
+      "name": "ByteTracker._remove_dead_tracks",
+      "sha256": "222dceb4f39ab04cfee6f08695541729e04d94c3010fbd92daf7a19afd412f31"
+    },
+    {
+      "path": "tracker.py",
+      "name": "ByteTracker._output",
+      "sha256": "f22e2d0e6575b92a85ec3eefd9861106a3f7b74c6252b5419a722b323062d55c"
+    }
+  ]
+}
