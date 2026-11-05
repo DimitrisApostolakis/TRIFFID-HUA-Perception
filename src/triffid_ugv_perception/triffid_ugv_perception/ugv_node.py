@@ -1,154 +1,29 @@
-"""
-TRIFFID UGV Perception Node
-
-Pixel-aligned RGB-D pipeline: RGB and depth share resolution/intrinsics
-(RealSense), so depth is sampled directly at each detection's pixels.
-YOLO on RGB -> sample+back-project depth -> median 3D position ->
-camera-optical axes to b2/base_link -> IoU track -> publish Detection3DArray.
-"""
-
+"""UGV ROS transport and orchestration; model/geometry/tracking/output are independent."""
 import os
-
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
-
 from sensor_msgs.msg import Image
-from vision_msgs.msg import Detection3DArray, Detection3D, ObjectHypothesisWithPose
+from vision_msgs.msg import Detection3DArray
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
-
-from triffid_ugv_perception.tracker import ByteTracker
-
-try:
-    from ultralytics import YOLO
-    _HAS_YOLO = True
-except ImportError:
-    _HAS_YOLO = False
-
-
-TARGET_CLASSES = {
-    0: 'water',
-    1: 'fence',
-    2: 'green tree',
-    3: 'helmet',
-    4: 'flame',
-    5: 'smoke',
-    6: 'first responder',
-    7: 'destroyed vehicle',
-    8: 'fire hose',
-    9: 'scba',
-    10: 'boot',
-    11: 'green plant',
-    12: 'mask',
-    13: 'window',
-    14: 'building',
-    15: 'destroyed building',
-    16: 'debris',
-    17: 'ladder',
-    18: 'dirt road',
-    19: 'dry tree',
-    20: 'wall',
-    21: 'civilian vehicle',
-    22: 'road',
-    23: 'citizen',
-    24: 'green grass',
-    25: 'pole',
-    26: 'boat',
-    27: 'pavement',
-    28: 'dry grass',
-    29: 'animal',
-    30: 'excavator',
-    31: 'door',
-    32: 'mud',
-    33: 'barrier',
-    34: 'hole in the ground',
-    35: 'bag',
-    36: 'burnt tree',
-    37: 'ambulance',
-    38: 'fire truck',
-    39: 'cone',
-    40: 'bicycle',
-    41: 'tower',
-    42: 'silo',
-    43: 'military personnel',
-    44: 'burnt grass',
-    45: 'ax',
-    46: 'glove',
-    47: 'crane',
-    48: 'stairs',
-    49: 'dry plant',
-    50: 'furniture',
-    51: 'tank',
-    52: 'protective glasses',
-    53: 'barrel',
-    54: 'shovel',
-    55: 'fire hydrant',
-    56: 'police vehicle',
-    57: 'burnt plant',
-    58: 'army vehicle',
-    59: 'chainsaw',
-    60: 'aerial vehicle',
-    61: 'lifesaver',
-    62: 'extinguisher',
-}
-
-# Frame IDs
-BASE_FRAME = 'b2/base_link'
-
-# Default topic names
-DEFAULT_RGB_TOPIC = '/b2/camera_front_435i/realsense_front_435i/color/image_raw_broadcasted'
-DEFAULT_DEPTH_TOPIC = '/b2/camera_front_435i/realsense_front_435i/aligned_depth_to_color/image_raw_broadcasted'
-DEFAULT_THERMAL_TOPIC = '/b2/camera_flir/image_raw_broadcasted'
-
-# Fixed RealSense color intrinsics (640x480 aligned RGB-D stream)
-CAMERA_FRAME = 'camera_color_optical_frame'
-CAMERA_FX = 606.883056640625
-CAMERA_FY = 606.7998657226562
-CAMERA_CX = 323.86395263671875
-CAMERA_CY = 244.37435913085938
-
-# Maximum number of depth pixels to sample per detection (for efficiency)
-_MAX_DEPTH_SAMPLES = 500
-
+from .config import (NODE_PARAMETERS, declare_parameters, CAMERA_FRAME,
+                     CAMERA_FX, CAMERA_FY, CAMERA_CX, CAMERA_CY)
+from .models import create_detector
+from .pipeline import localize_detections
+from .tracker import ByteTracker
+from .debug import DebugPublisher
+from .messages import detection_array
 
 class UGVPerceptionNode(Node):
-    """Main UGV perception node – pixel-aligned RGB-D pipeline."""
-
     def __init__(self):
         super().__init__('ugv_perception_node')
 
-        # ── Parameters ──────────────────────────────────────────────
-        self.declare_parameter('model_path', '/ws/best.pt')
-        self.declare_parameter('confidence_threshold', 0.35)
-        self.declare_parameter('target_frame', BASE_FRAME)
-        self.declare_parameter('use_dummy_detections', False)
-        self.declare_parameter('yolo_imgsz', 1280)
-        self.declare_parameter('tracker_iou_threshold', 0.30)
-        self.declare_parameter('tracker_iou_threshold_low', 0.15)
-        self.declare_parameter('tracker_conf_high', 0.40)
-        self.declare_parameter('tracker_max_age', 30)
-        self.declare_parameter('tracker_n_init', 3)
-        self.declare_parameter('tracker_pos_gate', 2.0)
-        self.declare_parameter('nms_merge_dist_m', 0.5)
-        self.declare_parameter('publish_debug_image', True)
-        self.declare_parameter('save_debug_frames', True)
-        self.declare_parameter('debug_frames_dir', '/ws/detection_frames')
-        self.declare_parameter('debug_frame_period_s', 1.0)
-        self.declare_parameter('save_thermal_frames', False)
-        self.declare_parameter('thermal_frames_dir', '/ws/thermal_frames')
-        self.declare_parameter('thermal_frame_period_s', 1.0)
-        # Topic names
-        self.declare_parameter('rgb_image_topic', DEFAULT_RGB_TOPIC)
-        self.declare_parameter('depth_image_topic', DEFAULT_DEPTH_TOPIC)
-        self.declare_parameter('thermal_image_topic', DEFAULT_THERMAL_TOPIC)
+        declare_parameters(self, NODE_PARAMETERS)
 
-        self.model_path = self.get_parameter('model_path').value
-        self.conf_thresh = self.get_parameter('confidence_threshold').value
         self.target_frame = self.get_parameter('target_frame').value
         self.use_dummy = self.get_parameter('use_dummy_detections').value
-        self.yolo_imgsz = self.get_parameter('yolo_imgsz').value
         self.tracker_iou = self.get_parameter('tracker_iou_threshold').value
         self.tracker_iou_low = self.get_parameter('tracker_iou_threshold_low').value
         self.tracker_conf_high = self.get_parameter('tracker_conf_high').value
@@ -167,22 +42,22 @@ class UGVPerceptionNode(Node):
         self.depth_topic = self.get_parameter('depth_image_topic').value
         self.thermal_topic = self.get_parameter('thermal_image_topic').value
 
-        # ── YOLO model ──────────────────────────────────────────────
-        if _HAS_YOLO:
-            self.get_logger().info(f'Loading YOLO model: {self.model_path}')
-            self.model = YOLO(self.model_path)
-            self.get_logger().info('Model loaded.')
-        else:
-            self.model = None
-            self.get_logger().error(
-                'ultralytics not installed — no detections will be produced. '
-                'Install with: pip install ultralytics'
+        self.detector = create_detector({name: self.get_parameter(name).value for name in NODE_PARAMETERS})
+        model_info = self.detector.metadata()
+        self.get_logger().info(
+            f'Detector: {model_info["name"]}; instance method: '
+            f'{model_info.get("instance_method", "backend instances")}'
+        )
+        if model_info.get('support_bank'):
+            bank = model_info['support_bank']
+            self.get_logger().info(
+                f'UGV bank: {self.get_parameter("support_bank").value}; '
+                f'{bank["shots"]} shot(s), manifest SHA256={bank["manifest_sha256"]}'
             )
 
         # ── State ───────────────────────────────────────────────────
         self.bridge = CvBridge()
-        self._last_debug_save_stamp = None
-        self._last_thermal_save_stamp = None
+        self.debug = DebugPublisher(self, self.bridge)
         if self.save_debug_frames:
             try:
                 os.makedirs(self.debug_frames_dir, exist_ok=True)
@@ -202,8 +77,6 @@ class UGVPerceptionNode(Node):
         self.camera_frame = CAMERA_FRAME
         self.depth_image = None          # latest depth frame (uint16, mm)
         self.depth_stamp = None
-        self.thermal_stamp = None
-        self.thermal_frames_received = 0
         self.tracker = ByteTracker(
             iou_threshold=float(self.tracker_iou),
             iou_threshold_low=float(self.tracker_iou_low),
@@ -238,7 +111,7 @@ class UGVPerceptionNode(Node):
         self.sub_thermal = self.create_subscription(
             Image,
             self.thermal_topic,
-            self.thermal_callback,
+            self.debug.thermal_callback,
             sensor_qos,
         )
         # ── Publishers ───────────────────────────────────────────────
@@ -280,9 +153,7 @@ class UGVPerceptionNode(Node):
             f'  Tracker: IoU={self.tracker_iou:.2f}, max_age={int(self.tracker_max_age)}'
         )
         if self.use_dummy:
-            self.get_logger().warn('*** DUMMY DETECTION MODE — bypassing YOLO ***')
-
-    # ─── Callbacks ──────────────────────────────────────────────────
+            self.get_logger().warn('*** DUMMY DETECTION MODE — bypassing model inference ***')
 
     def depth_callback(self, msg: Image):
         """Store latest depth image (16UC1, millimetres)."""
@@ -293,84 +164,6 @@ class UGVPerceptionNode(Node):
             self.depth_stamp = msg.header.stamp
         except Exception as e:
             self.get_logger().error(f'Depth conversion failed: {e}')
-
-    def thermal_callback(self, msg: Image):
-        """Confirm FLIR reception and optionally save debug-only snapshots."""
-        self.thermal_stamp = msg.header.stamp
-        self.thermal_frames_received += 1
-        self.get_logger().info(
-            f'Thermal stream active: received frame #{self.thermal_frames_received} '
-            f'({msg.width}x{msg.height}, encoding={msg.encoding})',
-            throttle_duration_sec=5.0,
-        )
-
-        if not self.save_thermal_frames:
-            return
-
-        stamp_s = float(msg.header.stamp.sec) + float(msg.header.stamp.nanosec) * 1e-9
-        period_s = max(0.0, float(self.thermal_frame_period_s))
-        should_save = (
-            self._last_thermal_save_stamp is None
-            or period_s == 0.0
-            or stamp_s < self._last_thermal_save_stamp
-            or (stamp_s - self._last_thermal_save_stamp) >= period_s
-        )
-        if not should_save:
-            return
-
-        try:
-            thermal = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
-            # Debug snapshots are normalized to viewable 8-bit when the
-            # FLIR stream is a higher-bit-depth single-channel image.
-            if thermal.ndim == 2 and thermal.dtype != np.uint8:
-                finite = np.isfinite(thermal)
-                if not np.any(finite):
-                    self.get_logger().warn(
-                        'Thermal frame contains no finite pixels; skipping snapshot.',
-                        throttle_duration_sec=5.0,
-                    )
-                    return
-                valid = thermal[finite].astype(np.float32)
-                lo = float(np.min(valid))
-                hi = float(np.max(valid))
-                if hi > lo:
-                    debug_thermal = np.clip(
-                        (thermal.astype(np.float32) - lo) * (255.0 / (hi - lo)),
-                        0.0, 255.0,
-                    ).astype(np.uint8)
-                else:
-                    debug_thermal = np.zeros(thermal.shape, dtype=np.uint8)
-            else:
-                debug_thermal = thermal
-
-            # ROS rgb8 is RGB, while OpenCV imwrite expects BGR channel order.
-            # Convert only for RGB-encoded 3-channel debug frames so the saved
-            # PNG preserves the FLIR palette colours correctly.
-            encoding = str(msg.encoding).lower()
-            if (
-                debug_thermal.ndim == 3
-                and debug_thermal.shape[2] == 3
-                and encoding in ('rgb8', 'rgb16')
-            ):
-                debug_thermal = cv2.cvtColor(debug_thermal, cv2.COLOR_RGB2BGR)
-
-            filename = (
-                f'thermal_{msg.header.stamp.sec}_'
-                f'{msg.header.stamp.nanosec:09d}.png'
-            )
-            path = os.path.join(self.thermal_frames_dir, filename)
-            if cv2.imwrite(path, debug_thermal):
-                self._last_thermal_save_stamp = stamp_s
-            else:
-                self.get_logger().warn(
-                    f'Failed to save thermal debug frame: {path}',
-                    throttle_duration_sec=5.0,
-                )
-        except Exception as e:
-            self.get_logger().warn(
-                f'Thermal debug frame conversion/save failed: {e}',
-                throttle_duration_sec=5.0,
-            )
 
     def rgb_callback(self, msg: Image):
         """Main processing trigger – runs on every RGB frame."""
@@ -409,127 +202,27 @@ class UGVPerceptionNode(Node):
                 throttle_duration_sec=10.0,
             )
 
-        # ── Step 1: YOLO detection on RGB ────────────────────────────
-        if self.use_dummy:
-            raw_detections = self._dummy_detection(cv_image)
-        else:
-            raw_detections = self._detect(cv_image)
+        # ── Step 1: Model detection on RGB ────────────────────────────
+        raw_detections = self.detector.detect(cv_image)
         if not raw_detections:
             self._publish_empty(msg.header.stamp)
-            self._publish_debug_overlay(cv_image, [], msg.header)
+            self.debug._publish_debug_overlay(cv_image, [], msg.header)
             return
 
-        # Fixed intrinsics for the 640x480 RealSense color stream.
-        # Depth is already aligned to color, so the same intrinsics apply.
-        fx = CAMERA_FX
-        fy = CAMERA_FY
-        cx = CAMERA_CX
-        cy = CAMERA_CY
-        camera_frame = self.camera_frame
-
-        # ── Step 2–4: For each detection, sample depth & back-project ─
-        detections_3d = []
-
-        for det in raw_detections:
-            x1, y1, x2, y2 = det['bbox']
-            mask = det.get('mask')
-
-            # Sample depth at detection pixels (pixel-aligned: same coords)
-            matched_pts = self._sample_depth_for_detection(
-                det, self.depth_image, fx, fy, cx, cy,
-                depth_scale_x=depth_scale_x,
-                depth_scale_y=depth_scale_y,
-                rgb_shape=(rgb_h, rgb_w),
-            )
-            if matched_pts is None or len(matched_pts) == 0:
-                continue
-
-            n_inside = len(matched_pts)
-
-            # Median position in camera_optical_frame
-            median_pt = np.median(matched_pts, axis=0)  # (3,)
-
-            # ── Step 5: camera optical axes → b2/base_link ──────────
-            # Assumption: the front RealSense is rigidly aligned with the UGV
-            # and its translational offset from base_link is neglected.
-            pt_base = self._camera_to_base(tuple(median_pt))
-
-            # ── Compute 3D bbox extent in base_link ─────────────────
-            pt_min_cam = np.min(matched_pts, axis=0)
-            pt_max_cam = np.max(matched_pts, axis=0)
-            cloud_extent = pt_max_cam - pt_min_cam
-
-            if np.any(cloud_extent > 1e-3):
-                corners_cam = np.array([
-                    [pt_min_cam[0], pt_min_cam[1], pt_min_cam[2]],
-                    [pt_min_cam[0], pt_min_cam[1], pt_max_cam[2]],
-                    [pt_min_cam[0], pt_max_cam[1], pt_min_cam[2]],
-                    [pt_min_cam[0], pt_max_cam[1], pt_max_cam[2]],
-                    [pt_max_cam[0], pt_min_cam[1], pt_min_cam[2]],
-                    [pt_max_cam[0], pt_min_cam[1], pt_max_cam[2]],
-                    [pt_max_cam[0], pt_max_cam[1], pt_min_cam[2]],
-                    [pt_max_cam[0], pt_max_cam[1], pt_max_cam[2]],
-                ])
-            else:
-                corners_cam = self._bbox_to_3d_corners(
-                    x1, y1, x2, y2, median_pt[2], fx, fy, cx, cy,
-                )
-
-            corners_base = self._camera_to_base_batch(corners_cam)
-            extent_base = tuple(
-                float(v) for v in np.ptp(corners_base, axis=0)
-            )
-
-            detections_3d.append({
-                'position': pt_base,
-                'extent': extent_base,
-                'class_id': det['class_id'],
-                'class_name': det['class_name'],
-                'confidence': det['confidence'],
-                'bbox': det['bbox'],
-                'n_depth_pts': n_inside,
-            })
-
-        # ── Step 5.5: 3-D NMS — deduplicate overlapping detections ───
-        detections_3d = self._nms_3d(
-            detections_3d, dist_thresh=float(self.nms_merge_dist_m),
+        detections_3d = localize_detections(
+            raw_detections, self.depth_image, cv_image.shape[:2],
+            (CAMERA_FX, CAMERA_FY, CAMERA_CX, CAMERA_CY), self.nms_merge_dist_m,
         )
 
         # ── Step 6: Track across frames (IoU on RGB bboxes) ─────────
         tracked = self.tracker.update(detections_3d)
 
         # ── Step 7: Publish Detection3DArray ─────────────────────────
-        det_array = Detection3DArray()
-        det_array.header.stamp = msg.header.stamp       # timestamp from RGB
-        det_array.header.frame_id = self.target_frame    # b2/base_link
-
-        for t in tracked:
-            d3d = Detection3D()
-            d3d.header = det_array.header
-
-            if t['position'] is not None:
-                d3d.bbox.center.position.x = float(t['position'][0])
-                d3d.bbox.center.position.y = float(t['position'][1])
-                d3d.bbox.center.position.z = float(t['position'][2])
-
-            ext = t.get('extent', (0.0, 0.0, 0.0))
-            d3d.bbox.size.x = float(ext[0])
-            d3d.bbox.size.y = float(ext[1])
-            d3d.bbox.size.z = float(ext[2])
-
-            hyp = ObjectHypothesisWithPose()
-            hyp.hypothesis.class_id = str(t['class_name'])
-            hyp.hypothesis.score = float(t['confidence'])
-            d3d.results.append(hyp)
-
-            d3d.id = str(t['track_id'])
-            det_array.detections.append(d3d)
-
-        self.pub_det3d.publish(det_array)
+        self.pub_det3d.publish(detection_array(tracked, msg.header.stamp, self.target_frame))
 
         # ── Step 8: Publish segmentation label map (mono8) ───────────
-        self._publish_segmentation(cv_image, raw_detections, msg.header)
-        self._publish_debug_overlay(cv_image, tracked, msg.header)
+        self.debug._publish_segmentation(cv_image, raw_detections, msg.header)
+        self.debug._publish_debug_overlay(cv_image, tracked, msg.header)
 
         if tracked:
             self.get_logger().info(
@@ -538,304 +231,12 @@ class UGVPerceptionNode(Node):
                 throttle_duration_sec=1.0,
             )
 
-    # ─── YOLO detection ────────────────────────────────────────────
-
-    def _detect(self, cv_image):
-        """Run YOLO-seg, return dicts with bbox/class_id/class_name/confidence/mask."""
-        if self.model is None:
-            return []
-
-        results = self.model(
-            cv_image, conf=self.conf_thresh, imgsz=self.yolo_imgsz, verbose=False,
-        )
-        detections = []
-        for r in results:
-            masks_data = r.masks  # may be None if model produced no masks
-            for i, box in enumerate(r.boxes):
-                cls_id = int(box.cls[0])
-                if cls_id not in TARGET_CLASSES:
-                    continue
-                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-
-                # Extract per-instance binary mask (resized to input image)
-                mask = None
-                if masks_data is not None and i < len(masks_data.data):
-                    mask = masks_data.data[i].cpu().numpy().astype(bool)
-                    # Resize mask to match the input image dimensions
-                    h, w = cv_image.shape[:2]
-                    if mask.shape != (h, w):
-                        mask = cv2.resize(
-                            mask.astype(np.uint8), (w, h),
-                            interpolation=cv2.INTER_NEAREST,
-                        ).astype(bool)
-
-                detections.append({
-                    'bbox': (float(x1), float(y1), float(x2), float(y2)),
-                    'class_id': cls_id,
-                    'class_name': TARGET_CLASSES[cls_id],
-                    'confidence': float(box.conf[0]),
-                    'mask': mask,
-                })
-        return detections
-
-    def _dummy_detection(self, cv_image):
-        """Return a single fake detection at the image centre.
-        Useful for testing the depth/3D/tracking pipeline without YOLO."""
-        h, w = cv_image.shape[:2]
-        # Full-image bbox so projections from the tilted depth camera
-        # (which hits the lower portion of the RGB image) are captured.
-        return [{
-            'bbox': (0.0, 0.0, float(w), float(h)),
-            'class_id': 0,
-            'class_name': TARGET_CLASSES[0],
-            'confidence': 0.99,
-            'mask': None,
-        }]
-
-    # ─── Segmentation label-map publisher ──────────────────────────
-
-    def _publish_segmentation(self, cv_image, detections, header):
-        """Publish a mono8 label map (pixel = 1-based class id, 0 = background);
-        overlapping masks resolve to the higher-confidence detection."""
-        if self.pub_seg.get_subscription_count() == 0:
-            return  # no subscribers, skip
-
-        h, w = cv_image.shape[:2]
-        label_img = np.zeros((h, w), dtype=np.uint8)
-
-        # Sort ascending by confidence so higher-conf overwrites lower
-        sorted_dets = sorted(detections,
-                             key=lambda d: d['confidence'])
-        for det in sorted_dets:
-            mask = det.get('mask')
-            if mask is None:
-                continue
-            # class_id is 0-based from YOLO; store as 1-based (0 = bg)
-            label_img[mask] = det['class_id'] + 1
-
-        seg_msg = self.bridge.cv2_to_imgmsg(label_img, encoding='mono8')
-        seg_msg.header = header
-        self.pub_seg.publish(seg_msg)
-
-    def _publish_debug_overlay(self, cv_image, tracked, header):
-        """Publish and optionally save RGB debug image with detection overlay."""
-        if not self.publish_debug_image and not self.save_debug_frames:
-            return
-
-        dbg = cv_image.copy()
-        for t in tracked:
-            bbox = t.get('bbox')
-            if bbox is None:
-                continue
-            x1, y1, x2, y2 = [int(v) for v in bbox]
-            tid = int(t.get('track_id', -1))
-            cls = t.get('class_name', 'unknown')
-            conf = float(t.get('confidence', 0.0))
-            npts = int(t.get('n_depth_pts', 0))
-
-            # Deterministic per-track color makes ID switches obvious.
-            color = (
-                int((37 * tid) % 255),
-                int((97 * tid) % 255),
-                int((173 * tid) % 255),
-            )
-            cv2.rectangle(dbg, (x1, y1), (x2, y2), color, 2)
-            label = f'{cls} #{tid} {conf:.2f} d={npts}'
-            ytxt = max(18, y1 - 6)
-            cv2.putText(
-                dbg, label, (x1, ytxt),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2, cv2.LINE_AA,
-            )
-
-        # Persist only frames that contain at least one tracked detection.
-        if self.save_debug_frames and tracked:
-            stamp_s = float(header.stamp.sec) + float(header.stamp.nanosec) * 1e-9
-            period_s = max(0.0, float(self.debug_frame_period_s))
-            should_save = (
-                self._last_debug_save_stamp is None
-                or period_s == 0.0
-                or stamp_s < self._last_debug_save_stamp
-                or (stamp_s - self._last_debug_save_stamp) >= period_s
-            )
-            if should_save:
-                filename = (
-                    f'detection_{header.stamp.sec}_'
-                    f'{header.stamp.nanosec:09d}.png'
-                )
-                path = os.path.join(self.debug_frames_dir, filename)
-                if cv2.imwrite(path, dbg):
-                    self._last_debug_save_stamp = stamp_s
-                else:
-                    self.get_logger().warn(
-                        f'Failed to save debug detection frame: {path}',
-                        throttle_duration_sec=5.0,
-                    )
-
-        if self.publish_debug_image and self.pub_debug.get_subscription_count() > 0:
-            msg = self.bridge.cv2_to_imgmsg(dbg, encoding='bgr8')
-            msg.header = header
-            self.pub_debug.publish(msg)
-
-    # ─── Cross-camera depth → RGB-frame geometry ───────────────────
-
-    def _sample_depth_for_detection(
-        self,
-        det,
-        depth_img,
-        fx,
-        fy,
-        cx,
-        cy,
-        depth_scale_x=1.0,
-        depth_scale_y=1.0,
-        rgb_shape=None,
-    ):
-        """Sample depth at the detection's mask/bbox pixels and back-project
-        to camera_optical_frame (X right, Y down, Z forward). Returns
-        (M, 3) or None; RGB/depth share pixel grid on this camera."""
-        depth_h, depth_w = depth_img.shape[:2]
-        if rgb_shape is None:
-            rgb_h, rgb_w = depth_h, depth_w
-        else:
-            rgb_h, rgb_w = rgb_shape
-        mask = det.get('mask')
-        x1, y1, x2, y2 = det['bbox']
-
-        if mask is not None:
-            ys, xs = np.where(mask)
-            if len(xs) == 0:
-                return None
-            if len(xs) > _MAX_DEPTH_SAMPLES:
-                step = max(1, len(xs) // _MAX_DEPTH_SAMPLES)
-                xs = xs[::step]
-                ys = ys[::step]
-        else:
-            # Bbox grid fallback (dummy mode / no mask)
-            ix1 = max(0, min(int(x1), rgb_w - 1))
-            ix2 = max(ix1 + 1, min(int(x2), rgb_w))
-            iy1 = max(0, min(int(y1), rgb_h - 1))
-            iy2 = max(iy1 + 1, min(int(y2), rgb_h))
-            side = max(1, min(ix2 - ix1, iy2 - iy1) // 10)
-            xs_g, ys_g = np.meshgrid(
-                np.arange(ix1, ix2, max(1, side)),
-                np.arange(iy1, iy2, max(1, side)),
-            )
-            xs = xs_g.ravel()
-            ys = ys_g.ravel()
-            if len(xs) > _MAX_DEPTH_SAMPLES:
-                step = max(1, len(xs) // _MAX_DEPTH_SAMPLES)
-                xs = xs[::step]
-                ys = ys[::step]
-
-        # Map RGB coordinates onto depth indices for non-aligned fallback.
-        xs_depth = np.rint(xs.astype(np.float64) * depth_scale_x).astype(np.int32)
-        ys_depth = np.rint(ys.astype(np.float64) * depth_scale_y).astype(np.int32)
-
-        # Clip to depth image bounds
-        ok = (
-            (xs_depth >= 0) & (xs_depth < depth_w) &
-            (ys_depth >= 0) & (ys_depth < depth_h)
-        )
-        xs = xs[ok]
-        ys = ys[ok]
-        xs_depth = xs_depth[ok]
-        ys_depth = ys_depth[ok]
-        if len(xs_depth) == 0:
-            return None
-
-        # Read depth (uint16 mm)
-        z_mm = depth_img[ys_depth, xs_depth].astype(np.float64)
-        valid = z_mm > 0
-        if not np.any(valid):
-            return None
-
-        xs = xs[valid].astype(np.float64)
-        ys = ys[valid].astype(np.float64)
-        z_m = z_mm[valid] / 1000.0
-
-        # Pinhole back-projection → camera_optical_frame
-        X = (xs - cx) * z_m / fx
-        Y = (ys - cy) * z_m / fy
-        Z = z_m
-        return np.column_stack([X, Y, Z])
-
-    @staticmethod
-    def _camera_to_base(point_cam):
-        """Map RealSense optical axes to b2/base_link axes.
-
-        camera optical: X=right, Y=down, Z=forward
-        b2/base_link:    X=forward, Y=left, Z=up
-        """
-        x_cam, y_cam, z_cam = point_cam
-        return (
-            float(z_cam),
-            float(-x_cam),
-            float(-y_cam),
-        )
-
-    @staticmethod
-    def _camera_to_base_batch(points_cam):
-        """Vectorized camera-optical → b2/base_link axis mapping."""
-        points_cam = np.asarray(points_cam)
-        return np.column_stack([
-            points_cam[:, 2],
-            -points_cam[:, 0],
-            -points_cam[:, 1],
-        ])
-
-    def _bbox_to_3d_corners(self, u1, v1, u2, v2, depth, fx, fy, cx, cy):
-        """Back-project a 2D bbox to 8 3D corners at a fixed depth (Z)."""
-        x_left  = (u1 - cx) * depth / fx
-        x_right = (u2 - cx) * depth / fx
-        y_top   = (v1 - cy) * depth / fy
-        y_bot   = (v2 - cy) * depth / fy
-
-        x_min, x_max = min(x_left, x_right), max(x_left, x_right)
-        y_min, y_max = min(y_top, y_bot), max(y_top, y_bot)
-
-        z = float(depth)
-        return np.array([
-            [x_min, y_min, z],
-            [x_min, y_max, z],
-            [x_max, y_min, z],
-            [x_max, y_max, z],
-            [x_min, y_min, z],
-            [x_min, y_max, z],
-            [x_max, y_min, z],
-            [x_max, y_max, z],
-        ])
-
-    # ─── Helpers ────────────────────────────────────────────────────
-
-    @staticmethod
-    def _nms_3d(detections, dist_thresh=0.5):
-        """Keep the highest-confidence detection within dist_thresh metres —
-        overlapping classes (e.g. Building/Destroyed building) can land on
-        the same depth points and produce near-identical positions."""
-        if len(detections) <= 1:
-            return detections
-
-        # Sort by confidence descending — greedy NMS
-        dets = sorted(detections, key=lambda d: d['confidence'], reverse=True)
-        keep = []
-        for det in dets:
-            pos = np.array(det['position'])
-            suppressed = False
-            for kept in keep:
-                if np.linalg.norm(pos - np.array(kept['position'])) < dist_thresh:
-                    suppressed = True
-                    break
-            if not suppressed:
-                keep.append(det)
-        return keep
-
     def _publish_empty(self, stamp):
         """Publish an empty Detection3DArray (keeps downstream aware)."""
         msg = Detection3DArray()
         msg.header.stamp = stamp
         msg.header.frame_id = self.target_frame
         self.pub_det3d.publish(msg)
-
 
 def main(args=None):
     rclpy.init(args=args)

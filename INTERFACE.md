@@ -4,21 +4,26 @@
 
 | Direction | Topic | Type | Notes |
 |---|---|---|---|
-| in | `rgb_image_topic` param (default `/camera_front/raw_image`) | `sensor_msgs/Image` | bgr8 or yuv422 |
-| in | `depth_image_topic` param (default `/camera_front/realsense_front/depth/image_rect_raw`) | `sensor_msgs/Image` | 16UC1, mm, pixel-aligned to RGB |
-| in | `camera_info_topic` param (default `/camera_front/camera_info`) | `sensor_msgs/CameraInfo` | shared RGB/depth intrinsics |
-| in | `/fix` | `sensor_msgs/NavSatFix` | optional; `local_frame:true` in output until received |
-| in | `/dog_odom` | `nav_msgs/Odometry` | optional; heading for GeoJSON rotation |
-| in | `/tf`, `/tf_static` | `tf2_msgs/TFMessage` | camera_optical_frame → `b2/base_link` required |
-| out | `/ugv/detections/front/detections_3d` | `vision_msgs/Detection3DArray` | frame_id `b2/base_link` |
-| out | `/ugv/detections/front/segmentation` | `sensor_msgs/Image` | mono8, pixel = class id + 1 (0 = bg) |
-| out | `/ugv/detections/front/debug_image` | `sensor_msgs/Image` | bgr8, lazy (only if subscribed) |
-| out | `/ugv/detections/front/geojson` | `std_msgs/String` | GeoJSON FeatureCollection, per frame |
+| in | `rgb_image_topic` (default `/b2/camera_front_435i/realsense_front_435i/color/image_raw_broadcasted`) | `sensor_msgs/Image` | bgr8 or YUYV |
+| in | `depth_image_topic` (default `/b2/camera_front_435i/realsense_front_435i/aligned_depth_to_color/image_raw_broadcasted`) | `sensor_msgs/Image` | 16UC1, mm, aligned to RGB |
+| in | `thermal_image_topic` (default `/b2/camera_flir/image_raw_broadcasted`) | `sensor_msgs/Image` | debug snapshots only |
+| in | `/b2/ugv_status` | `ugv_status_interfaces/UnitreeStatus` | primary position when installed, valid and fresh |
+| in | `/fix` | `sensor_msgs/NavSatFix` | filtered position fallback |
+| in | `/b2/nicla/magnetometer/heading_broadcasted` | `std_msgs/Float32` | compass heading in degrees |
+| out | `/ugv/detections/front/detections_3d` | `vision_msgs/Detection3DArray` | frame `b2/base_link` |
+| out | `/ugv/detections/front/segmentation` | `sensor_msgs/Image` | mono8, class ID + 1; 0 is background |
+| out | `/ugv/detections/front/debug_image` | `sensor_msgs/Image` | bgr8 overlays |
+| out | `/ugv/detections/front/geojson` | `std_msgs/String` | per-frame FeatureCollection |
+
+Calibration and geometry retain the topic-update branch's fixed RealSense
+intrinsics and optical-to-body axis mapping. Position priority is fresh ROS status,
+HTTP position API, filtered `/fix`, then parameter seed. See the
+[UGV module documentation](src/triffid_ugv_perception/README.md).
 
 ## Detection3DArray Fields
 
 `bbox.center.position` = 3D centroid, `bbox.size` = extent, both in `b2/base_link` (X=fwd, Y=left, Z=up).
-`results[0].hypothesis.class_id` = class name (string), `.score` = confidence. `id` = persistent track id (string).
+`results[0].hypothesis.class_id` = class name (string), `.score` = backend confidence (SANSA: mean foreground probability per connected component, not calibrated YOLO confidence). `id` = persistent track id (string).
 
 ## GeoJSON Feature Schema
 
@@ -66,69 +71,69 @@ Both UGV (`/ugv/detections/front/geojson`) and UAV output use this shape.
 
 ## Class List (63 classes)
 
-`Geometry` is the point/line/polygon rule from the table below: it decides
-sample-point count for the UAV pipeline and geometry type for the UGV bridge.
+`Geometry` below describes UGV output: fence and wall are LineString; all
+other classes are Point. UAV geometry is independent of this UGV policy.
 
 | ID | Class | Category | Geometry |
 |---|---|---|---|
-| 0 | water | obstacle | Polygon |
-| 1 | fence | obstacle | Line |
-| 2 | green tree | nature | Polygon |
+| 0 | water | obstacle | Point |
+| 1 | fence | obstacle | LineString |
+| 2 | green tree | nature | Point |
 | 3 | helmet | equipment | Point |
-| 4 | flame | hazard | Polygon |
-| 5 | smoke | hazard | Polygon |
+| 4 | flame | hazard | Point |
+| 5 | smoke | hazard | Point |
 | 6 | first responder | person | Point |
 | 7 | destroyed vehicle | vehicle | Point |
 | 8 | fire hose | equipment | Point |
 | 9 | scba | equipment | Point |
 | 10 | boot | equipment | Point |
-| 11 | green plant | nature | Polygon |
+| 11 | green plant | nature | Point |
 | 12 | mask | equipment | Point |
 | 13 | window | infrastructure | Point |
-| 14 | building | infrastructure | Polygon |
-| 15 | destroyed building | infrastructure | Polygon |
-| 16 | debris | obstacle | Polygon |
-| 17 | ladder | equipment | Polygon |
-| 18 | dirt road | infrastructure | Polygon |
-| 19 | dry tree | nature | Polygon |
-| 20 | wall | infrastructure | Line |
+| 14 | building | infrastructure | Point |
+| 15 | destroyed building | infrastructure | Point |
+| 16 | debris | obstacle | Point |
+| 17 | ladder | equipment | Point |
+| 18 | dirt road | infrastructure | Point |
+| 19 | dry tree | nature | Point |
+| 20 | wall | infrastructure | LineString |
 | 21 | civilian vehicle | vehicle | Point |
-| 22 | road | infrastructure | Polygon |
+| 22 | road | infrastructure | Point |
 | 23 | citizen | person | Point |
-| 24 | green grass | nature | Polygon |
+| 24 | green grass | nature | Point |
 | 25 | pole | infrastructure | Point |
-| 26 | boat | vehicle | Polygon |
-| 27 | pavement | infrastructure | Polygon |
-| 28 | dry grass | nature | Polygon |
+| 26 | boat | vehicle | Point |
+| 27 | pavement | infrastructure | Point |
+| 28 | dry grass | nature | Point |
 | 29 | animal | nature | Point |
-| 30 | excavator | equipment | Polygon |
+| 30 | excavator | equipment | Point |
 | 31 | door | infrastructure | Point |
-| 32 | mud | obstacle | Polygon |
-| 33 | barrier | obstacle | Polygon |
+| 32 | mud | obstacle | Point |
+| 33 | barrier | obstacle | Point |
 | 34 | hole in the ground | obstacle | Point |
 | 35 | bag | equipment | Point |
-| 36 | burnt tree | hazard | Polygon |
+| 36 | burnt tree | hazard | Point |
 | 37 | ambulance | vehicle | Point |
 | 38 | fire truck | vehicle | Point |
 | 39 | cone | obstacle | Point |
-| 40 | bicycle | vehicle | Polygon |
-| 41 | tower | infrastructure | Polygon |
-| 42 | silo | infrastructure | Polygon |
+| 40 | bicycle | vehicle | Point |
+| 41 | tower | infrastructure | Point |
+| 42 | silo | infrastructure | Point |
 | 43 | military personnel | person | Point |
-| 44 | burnt grass | hazard | Polygon |
+| 44 | burnt grass | hazard | Point |
 | 45 | ax | equipment | Point |
 | 46 | glove | equipment | Point |
-| 47 | crane | equipment | Polygon |
+| 47 | crane | equipment | Point |
 | 48 | stairs | infrastructure | Point |
-| 49 | dry plant | nature | Polygon |
-| 50 | furniture | equipment | Polygon |
-| 51 | tank | equipment | Polygon |
+| 49 | dry plant | nature | Point |
+| 50 | furniture | equipment | Point |
+| 51 | tank | equipment | Point |
 | 52 | protective glasses | equipment | Point |
-| 53 | barrel | equipment | Polygon |
+| 53 | barrel | equipment | Point |
 | 54 | shovel | equipment | Point |
 | 55 | fire hydrant | equipment | Point |
 | 56 | police vehicle | vehicle | Point |
-| 57 | burnt plant | hazard | Polygon |
+| 57 | burnt plant | hazard | Point |
 | 58 | army vehicle | vehicle | Point |
 | 59 | chainsaw | equipment | Point |
 | 60 | aerial vehicle | vehicle | Point |

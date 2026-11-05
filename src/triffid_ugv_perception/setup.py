@@ -1,4 +1,4 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 import os
 from glob import glob
 
@@ -7,7 +7,7 @@ package_name = 'triffid_ugv_perception'
 setup(
     name=package_name,
     version='0.1.0',
-    packages=[package_name],
+    packages=find_packages(exclude=["tests", "tests.*"]),
     data_files=[
         # Register package with ament index
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
@@ -24,6 +24,7 @@ setup(
     license='Apache-2.0',
     entry_points={
         'console_scripts': [
+            'ugv_bank = triffid_ugv_perception.bank:main',
             'ugv_node = triffid_ugv_perception.ugv_node:main',
             'geojson_bridge = triffid_ugv_perception.geojson_bridge:main',
         ],

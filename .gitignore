@@ -31,3 +31,8 @@ __pycache__/
 
 # Secrets / credentials
 *.env
+
+# UGV models and independent visual support bank
+ugv_models/
+ugv_supports/
+.pytest_cache/

@@ -1,202 +1,26 @@
-"""
-TRIFFID GeoJSON Bridge
-
-Converts UGV Detection3DArray (b2/base_link) to RFC-7946 GeoJSON: publishes
-per-frame on a ROS topic, and periodically flushes the accumulated set to
-disk and/or the TELESTO Map Manager API (save_to_disk / publish_to_api).
-
-Body-frame detections are rotated by robot heading
-(/b2/nicla/magnetometer/heading_broadcasted) into ENU and added to the
-current UGV position. Latitude/longitude come primarily from the ROS UGV
-status topic, with the UGV status HTTP API and /fix (median-filtered) as
-fallbacks. Without a valid global position source, raw local (x, y, z) is
-emitted with "local_frame": true.
-"""
-
-import collections
+"""ROS bridge: subscriptions, publication, periodic snapshots and bounded upload queue."""
 import json
-import math
-import os
 import queue
 import threading
-import time
 from pathlib import Path
-from urllib.request import Request, urlopen
-from urllib.error import URLError
-
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-
 from vision_msgs.msg import Detection3DArray
-from sensor_msgs.msg import NavSatFix
-from std_msgs.msg import String, Float32
-
-try:
-    from ugv_status_interfaces.msg import UnitreeStatus
-except ImportError:
-    # Keep the bridge usable in lightweight/offline images where the custom
-    # UGV interface package is not installed. In that case the HTTP API and
-    # /fix remain available as fallbacks.
-    UnitreeStatus = None
-
-# Earth radius (WGS-84 semi-major axis) in metres
-_R_EARTH = 6378137.0
-
-# GPS sliding-window size for median filter
-_GPS_WINDOW = 7
-
-# Minimum polygon extent (m) so a zero-size bbox still emits a visible shape.
-_MIN_EXTENT = 0.3
-
-# Point = small/mobile objects, LineString = fences/walls, else Polygon.
-_POINT_CLASSES = frozenset([
-    'helmet', 'first responder', 'destroyed vehicle', 'fire hose',
-    'scba', 'boot', 'mask', 'window', 'citizen', 'pole', 'animal',
-    'door', 'civilian vehicle', 'hole in the ground', 'bag',
-    'ambulance', 'fire truck', 'cone', 'military personnel', 'ax',
-    'glove', 'stairs', 'protective glasses', 'shovel', 'fire hydrant',
-    'police vehicle', 'army vehicle', 'chainsaw', 'aerial vehicle',
-    'lifesaver', 'extinguisher',
-])
-
-_LINE_CLASSES = frozenset([
-    'fence', 'wall',
-])
-
-
-def _haversine_m(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
-    """Return the Haversine distance in metres between two GPS points."""
-    import math as _math
-    r = 6378137.0
-    d_lat = _math.radians(lat2 - lat1)
-    d_lon = _math.radians(lon2 - lon1)
-    a = (_math.sin(d_lat / 2) ** 2
-         + _math.cos(_math.radians(lat1)) * _math.cos(_math.radians(lat2))
-         * _math.sin(d_lon / 2) ** 2)
-    return r * 2.0 * _math.asin(_math.sqrt(a))
-
-
-def _feature_centroid(feature: dict):
-    """Return (lon, lat) centroid of a GeoJSON feature, or None."""
-    geom = feature.get('geometry') or {}
-    geom_type = geom.get('type')
-    coords = geom.get('coordinates')
-    if not coords:
-        return None
-    if geom_type == 'Point':
-        return (coords[0], coords[1])
-    if geom_type == 'LineString':
-        lons = [c[0] for c in coords]
-        lats = [c[1] for c in coords]
-        return (sum(lons) / len(lons), sum(lats) / len(lats))
-    if geom_type == 'Polygon' and coords:
-        ring = coords[0]
-        lons = [c[0] for c in ring]
-        lats = [c[1] for c in ring]
-        return (sum(lons) / len(lons), sum(lats) / len(lats))
-    return None
-
-
-def _deduplicate_features(features: list, radius_m: float) -> list:
-    """Keep the highest-confidence feature per class within radius_m of
-    each other; local_frame features (no GPS) pass through unchanged."""
-    if len(features) <= 1:
-        return features
-
-    # Sort descending by confidence so greedy keep is always the best
-    def _conf(f):
-        return f.get('properties', {}).get('confidence', 0.0)
-
-    sorted_feats = sorted(features, key=_conf, reverse=True)
-    kept = []
-    for candidate in sorted_feats:
-        props = candidate.get('properties', {})
-        if props.get('local_frame', False):
-            kept.append(candidate)
-            continue
-        centroid = _feature_centroid(candidate)
-        if centroid is None:
-            kept.append(candidate)
-            continue
-        cls = props.get('class', '')
-        suppressed = False
-        for existing in kept:
-            if existing.get('properties', {}).get('class', '') != cls:
-                continue
-            existing_centroid = _feature_centroid(existing)
-            if existing_centroid is None:
-                continue
-            dist = _haversine_m(
-                centroid[0], centroid[1],
-                existing_centroid[0], existing_centroid[1],
-            )
-            if dist < radius_m:
-                suppressed = True
-                break
-        if not suppressed:
-            kept.append(candidate)
-    return kept
-
-
-def _merge_features(accumulated: list, new: list, radius_m: float) -> list:
-    """Merge new features into the accumulated set, deduplicated. GPS
-    features collapse to the best within radius_m; local-frame features
-    (no GPS) collapse to the newest per (class, track id)."""
-    latest_local = {}
-    gps_feats = []
-    for feat in accumulated + new:
-        props = feat.get('properties', {})
-        if props.get('local_frame', False):
-            key = (props.get('class', ''), props.get('id', ''))
-            latest_local[key] = feat        # later (newer) entries win
-        else:
-            gps_feats.append(feat)
-    return _deduplicate_features(gps_feats, radius_m) + list(latest_local.values())
-
-
-def _atomic_write_geojson(path, collection: dict) -> None:
-    """Write a GeoJSON snapshot atomically (tmp file + os.replace)."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + '.tmp')
-    tmp.write_text(json.dumps(collection, indent=2))
-    os.replace(tmp, path)
-
+from std_msgs.msg import String
+from .config import BRIDGE_PARAMETERS, declare_parameters
+from .position import PositionProvider
+from .geojson import GeoJSONFormatter
+from .delivery import FeatureDelivery
+from .storage import _atomic_write_geojson
+from .spatial import _deduplicate_features, _merge_features
 
 class GeoJSONBridge(Node):
-    """Convert ROS2 detections to GeoJSON and push to TELESTO."""
-
     def __init__(self):
         super().__init__('geojson_bridge')
 
-        # Parameters 
-        self.declare_parameter('api_url',
-                               'https://crispres.com/wp-json/map-manager/v1/features')
-        self.declare_parameter(
-            'position_api_url',
-            'https://crispres.com/wp-json/mqtt/v1/latest',
-        )
-        self.declare_parameter('use_position_api', True)
-        self.declare_parameter('ugv_status_topic', '/b2/ugv_status')
-        self.declare_parameter('ugv_status_timeout_s', 3.0)
-        self.declare_parameter('publish_to_api', False)
-        self.declare_parameter('save_to_disk', True)
-        self.declare_parameter('gps_origin_lat', 0.0)
-        self.declare_parameter('gps_origin_lon', 0.0)
-        self.declare_parameter('gps_origin_alt', 0.0)
-        self.declare_parameter('dedup_radius_m', 3.0)
-        self.declare_parameter('publish_period_s', 5.0)
-        self.declare_parameter('output_dir', '/ws/samples')
-        self.declare_parameter('target_geojson_stamp', 0)
+        declare_parameters(self, BRIDGE_PARAMETERS)
 
         self.api_url = self.get_parameter('api_url').value
-        self.position_api_url = self.get_parameter('position_api_url').value
-        self.use_position_api = bool(self.get_parameter('use_position_api').value)
-        self.ugv_status_topic = self.get_parameter('ugv_status_topic').value
-        self.ugv_status_timeout_s = max(
-            0.1, float(self.get_parameter('ugv_status_timeout_s').value)
-        )
         self.publish_to_api = self.get_parameter('publish_to_api').value
         self.save_to_disk = self.get_parameter('save_to_disk').value
         self.publish_period_s = float(self.get_parameter('publish_period_s').value)
@@ -205,52 +29,8 @@ class GeoJSONBridge(Node):
             self.get_parameter('target_geojson_stamp').value
         )
 
-        # GPS state
-        # Sliding window for median filtering of noisy GPS fixes
-        self._gps_lat_buf = collections.deque(maxlen=_GPS_WINDOW)
-        self._gps_lon_buf = collections.deque(maxlen=_GPS_WINDOW)
-        self._gps_alt_buf = collections.deque(maxlen=_GPS_WINDOW)
-
-        # Selected robot position. Fresh ROS UGV status is primary, followed
-        # by the HTTP status API, /fix, and finally gps_origin_* parameters.
-        self.robot_lat = 0.0
-        self.robot_lon = 0.0
-        self.robot_alt = 0.0
-        self.gps_valid = False
-        self._position_source = 'none'
-        self._position_lock = threading.Lock()
-
-        self._status_lat = 0.0
-        self._status_lon = 0.0
-        self._status_position_valid = False
-        self._status_received_monotonic = None
-
-        self._api_lat = 0.0
-        self._api_lon = 0.0
-        self._api_position_valid = False
-
-        self._fix_lat = 0.0
-        self._fix_lon = 0.0
-        self._fix_alt = 0.0
-        self._fix_valid = False
-
-        # Seed from parameters if provided
-        param_lat = self.get_parameter('gps_origin_lat').value
-        param_lon = self.get_parameter('gps_origin_lon').value
-        param_alt = self.get_parameter('gps_origin_alt').value
-        self._seed_lat = float(param_lat)
-        self._seed_lon = float(param_lon)
-        self._seed_alt = float(param_alt)
-        self._seed_valid = param_lat != 0.0 and param_lon != 0.0
-        if self._seed_valid:
-            self.robot_lat = self._seed_lat
-            self.robot_lon = self._seed_lon
-            self.robot_alt = self._seed_alt
-            self.gps_valid = True
-            self._position_source = 'param'
-
-        self.robot_heading = 0.0
-        self.heading_valid = False
+        self.position = PositionProvider(self)
+        self.formatter = GeoJSONFormatter(self.position)
 
         # Subscribers 
         self.sub_ugv = self.create_subscription(
@@ -259,37 +39,6 @@ class GeoJSONBridge(Node):
             self.ugv_callback,
             10,
         )
-        self.sub_status = None
-        if UnitreeStatus is not None:
-            self.sub_status = self.create_subscription(
-                UnitreeStatus,
-                self.ugv_status_topic,
-                self.ugv_status_callback,
-                10,
-            )
-        else:
-            self.get_logger().warn(
-                'ugv_status_interfaces is not installed; ROS UGV status '
-                'subscription disabled. Using API / /fix fallbacks.'
-            )
-
-        self.sub_gps = self.create_subscription(
-            NavSatFix,
-            '/fix',
-            self.gps_callback,
-            10,
-        )
-        self.sub_heading = self.create_subscription(
-            Float32,
-            '/b2/nicla/magnetometer/heading_broadcasted',
-            self.heading_callback,
-            QoSProfile(
-                history=HistoryPolicy.KEEP_LAST,
-                depth=5,
-                reliability=ReliabilityPolicy.RELIABLE,
-            ),
-        )
-
         # Publishers
         self.pub_geojson = self.create_publisher(
             String,
@@ -308,44 +57,13 @@ class GeoJSONBridge(Node):
             + (' AND '.join(outputs) if outputs
                else 'nothing (both save_to_disk and publish_to_api are off)')
         )
-        if self.gps_valid:
-            self.get_logger().info(
-                f'  GPS seeded from params: ({self.robot_lat}, {self.robot_lon})'
-            )
-        else:
-            self.get_logger().warn(
-                'UGV position not yet available — emitting local-frame coordinates. '
-                'Waiting for ROS UGV status, position API, or /fix.'
-            )
-        if self.sub_status is not None:
-            self.get_logger().info(
-                f'  UGV status primary: {self.ugv_status_topic} '
-                f'(timeout {self.ugv_status_timeout_s:.1f}s)'
-            )
-
-        # Poll the UGV status API on a background thread so network latency
-        # never blocks ROS callbacks. Only latitude/longitude are consumed.
-        self._position_stop = threading.Event()
-        self._position_worker = None
-        if self.use_position_api:
-            self._position_worker = threading.Thread(
-                target=self._position_api_worker_loop,
-                daemon=True,
-            )
-            self._position_worker.start()
-        else:
-            self.get_logger().info(
-                '  Position API disabled; using ROS UGV status / /fix fallbacks.'
-            )
-        self.create_timer(1.0, self._check_ugv_status_freshness)
-
         # Spatial deduplication radius (metres)
         self._dedup_radius_m = float(self.get_parameter('dedup_radius_m').value)
 
         # API uploads run on one worker thread; depth-1 queue drops a
         # stale pending snapshot instead of piling up threads.
         self._accumulated = []
-        self._uploaded_local_ids = set()   # local-frame features PUT once
+        self.delivery = FeatureDelivery(self.api_url, self._dedup_radius_m, self.get_logger())
         self._api_queue = queue.Queue(maxsize=1)
         self._api_worker = None
         if self.publish_to_api:
@@ -355,406 +73,6 @@ class GeoJSONBridge(Node):
             self._api_worker.start()
         self.create_timer(self.publish_period_s, self._periodic_flush)
 
-    #  Position (ROS UGV status -> HTTP API -> /fix -> parameters)
-    @staticmethod
-    def _valid_lat_lon(lat, lon):
-        return (
-            math.isfinite(lat)
-            and math.isfinite(lon)
-            and -90.0 <= lat <= 90.0
-            and -180.0 <= lon <= 180.0
-            and not (lat == 0.0 and lon == 0.0)
-        )
-
-    def _select_position_locked(self):
-        """Select the highest-priority currently available position source."""
-        if self._status_position_valid:
-            self.robot_lat = self._status_lat
-            self.robot_lon = self._status_lon
-            if self._fix_valid:
-                self.robot_alt = self._fix_alt
-            elif self._seed_valid:
-                self.robot_alt = self._seed_alt
-            else:
-                self.robot_alt = 0.0
-            self.gps_valid = True
-            self._position_source = 'ugv_status'
-        elif self._api_position_valid:
-            self.robot_lat = self._api_lat
-            self.robot_lon = self._api_lon
-            if self._fix_valid:
-                self.robot_alt = self._fix_alt
-            elif self._seed_valid:
-                self.robot_alt = self._seed_alt
-            else:
-                self.robot_alt = 0.0
-            self.gps_valid = True
-            self._position_source = 'api'
-        elif self._fix_valid:
-            self.robot_lat = self._fix_lat
-            self.robot_lon = self._fix_lon
-            self.robot_alt = self._fix_alt
-            self.gps_valid = True
-            self._position_source = 'fix'
-        elif self._seed_valid:
-            self.robot_lat = self._seed_lat
-            self.robot_lon = self._seed_lon
-            self.robot_alt = self._seed_alt
-            self.gps_valid = True
-            self._position_source = 'param'
-        else:
-            self.gps_valid = False
-            self._position_source = 'none'
-
-    def ugv_status_callback(self, msg):
-        """Use fresh, GNSS-valid ROS UGV status as the primary position."""
-        try:
-            if hasattr(msg, 'gnss_valid') and not bool(msg.gnss_valid):
-                raise ValueError('gnss_valid=false')
-
-            lat = float(msg.latitude)
-            lon = float(msg.longitude)
-
-            # Some UnitreeStatus producers also carry a nested
-            # global_position. Use it only if the top-level coordinates are
-            # invalid and the producer explicitly reports that field present.
-            if (not self._valid_lat_lon(lat, lon)
-                    and bool(getattr(msg, 'has_global_position', False))):
-                global_position = msg.global_position
-                if (hasattr(global_position, 'gnss_valid')
-                        and not bool(global_position.gnss_valid)):
-                    raise ValueError('global_position.gnss_valid=false')
-                lat = float(global_position.latitude)
-                lon = float(global_position.longitude)
-
-            if not self._valid_lat_lon(lat, lon):
-                raise ValueError('invalid latitude/longitude')
-
-        except (AttributeError, TypeError, ValueError) as e:
-            with self._position_lock:
-                previous_source = self._position_source
-                self._status_position_valid = False
-                self._select_position_locked()
-                current_source = self._position_source
-
-            if previous_source == 'ugv_status':
-                self.get_logger().warn(
-                    f'ROS UGV status invalid — falling back to '
-                    f'{current_source}: {e}'
-                )
-            return
-
-        with self._position_lock:
-            previous_source = self._position_source
-            self._status_lat = lat
-            self._status_lon = lon
-            self._status_position_valid = True
-            self._status_received_monotonic = time.monotonic()
-            self._select_position_locked()
-            current_source = self._position_source
-
-        if current_source == 'ugv_status' and previous_source != 'ugv_status':
-            self.get_logger().info(
-                f'UGV position acquired from ROS status: '
-                f'({lat:.7f}, {lon:.7f})'
-            )
-
-    def _check_ugv_status_freshness(self):
-        """Invalidate ROS UGV status when messages stop arriving."""
-        with self._position_lock:
-            if (not self._status_position_valid
-                    or self._status_received_monotonic is None):
-                return
-
-            age_s = time.monotonic() - self._status_received_monotonic
-            if age_s <= self.ugv_status_timeout_s:
-                return
-
-            previous_source = self._position_source
-            self._status_position_valid = False
-            self._select_position_locked()
-            current_source = self._position_source
-
-        if previous_source == 'ugv_status':
-            self.get_logger().warn(
-                f'ROS UGV status stale ({age_s:.1f}s) — falling back to '
-                f'{current_source}.'
-            )
-
-    def _position_api_worker_loop(self):
-        """Poll the UGV status API as the first fallback position source."""
-        while not self._position_stop.is_set():
-            previous_source = None
-            try:
-                req = Request(
-                    self.position_api_url,
-                    method='GET',
-                    headers={'Accept': 'application/json'},
-                )
-                with urlopen(req, timeout=3) as resp:
-                    if resp.status != 200:
-                        raise URLError(f'HTTP {resp.status}')
-                    payload = json.loads(resp.read().decode('utf-8'))
-
-                message = payload.get('message') or {}
-                if 'gnss_valid' in message and not bool(message['gnss_valid']):
-                    raise ValueError('gnss_valid=false')
-
-                lat = float(message['latitude'])
-                lon = float(message['longitude'])
-                if not self._valid_lat_lon(lat, lon):
-                    raise ValueError('invalid latitude/longitude')
-
-                with self._position_lock:
-                    previous_source = self._position_source
-                    self._api_lat = lat
-                    self._api_lon = lon
-                    self._api_position_valid = True
-                    self._select_position_locked()
-                    current_source = self._position_source
-
-                if current_source == 'api' and previous_source != 'api':
-                    self.get_logger().info(
-                        f'UGV position acquired from API: '
-                        f'({lat:.7f}, {lon:.7f})'
-                    )
-
-            except (URLError, OSError, KeyError, TypeError, ValueError,
-                    json.JSONDecodeError, UnicodeDecodeError) as e:
-                with self._position_lock:
-                    previous_source = self._position_source
-                    self._api_position_valid = False
-                    self._select_position_locked()
-                    current_source = self._position_source
-
-                if previous_source == 'api':
-                    if current_source == 'fix':
-                        self.get_logger().warn(
-                            f'Position API unavailable — falling back to /fix: {e}'
-                        )
-                    elif current_source == 'param':
-                        self.get_logger().warn(
-                            f'Position API unavailable — falling back to '
-                            f'gps_origin_* parameters: {e}'
-                        )
-                    else:
-                        self.get_logger().warn(
-                            f'Position API unavailable and no /fix available: {e}'
-                        )
-
-            self._position_stop.wait(2.0)
-
-    def gps_callback(self, msg: NavSatFix):
-        """Track /fix as the median-filtered fallback position."""
-        try:
-            lat = float(msg.latitude)
-            lon = float(msg.longitude)
-            alt = float(msg.altitude)
-        except (TypeError, ValueError):
-            return
-
-        if not self._valid_lat_lon(lat, lon):
-            return
-
-        self._gps_lat_buf.append(lat)
-        self._gps_lon_buf.append(lon)
-        if math.isfinite(alt):
-            self._gps_alt_buf.append(alt)
-
-        fix_lat = float(sorted(self._gps_lat_buf)[len(self._gps_lat_buf) // 2])
-        fix_lon = float(sorted(self._gps_lon_buf)[len(self._gps_lon_buf) // 2])
-        if self._gps_alt_buf:
-            fix_alt = float(
-                sorted(self._gps_alt_buf)[len(self._gps_alt_buf) // 2]
-            )
-        else:
-            fix_alt = 0.0
-
-        with self._position_lock:
-            previous_source = self._position_source
-            self._fix_lat = fix_lat
-            self._fix_lon = fix_lon
-            self._fix_alt = fix_alt
-            self._fix_valid = True
-            self._select_position_locked()
-            current_source = self._position_source
-
-        if current_source == 'fix' and previous_source != 'fix':
-            self.get_logger().info(
-                f'Using /fix fallback: ({fix_lat:.7f}, {fix_lon:.7f}, '
-                f'{fix_alt:.1f}m)'
-            )
-
-
-    #  Heading (magnetic north = 0°, clockwise, [0, 360))
-    def heading_callback(self, msg: Float32):
-        """Normalize compass heading to [-pi, pi), keeping clockwise-positive."""
-        heading_deg = float(msg.data) % 360.0
-        heading = math.radians(heading_deg)
-        self.robot_heading = (heading + math.pi) % (2.0 * math.pi) - math.pi
-
-        if not self.heading_valid:
-            self.heading_valid = True
-            self.get_logger().info(
-                f'Heading acquired: {heading_deg:.1f}° magnetic, '
-                f'{math.degrees(self.robot_heading):.1f}° normalized'
-            )
-
-    #  Coordinate conversion (body-frame → GPS)
-    @staticmethod
-    def _body_to_enu(x_fwd, y_left, z_up, heading):
-        """Convert body-frame (fwd, left, up) offset to ENU metres."""
-        angle_relative = math.atan2(-y_left, x_fwd)
-        angle_absolute = heading + angle_relative
-        angle_absolute = (
-            (angle_absolute + math.pi) % (2.0 * math.pi)
-        ) - math.pi
-
-        distance = math.hypot(x_fwd, y_left)
-        east = distance * math.sin(angle_absolute)
-        north = distance * math.cos(angle_absolute)
-        up = z_up
-        return east, north, up
-
-    def body_to_gps(self, x_fwd, y_left, z_up=0.0):
-        """Convert a b2/base_link offset to (lon, lat, alt); raw body-frame
-        coords if no global UGV position is available."""
-        with self._position_lock:
-            gps_valid = self.gps_valid
-            robot_lat = self.robot_lat
-            robot_lon = self.robot_lon
-            robot_alt = self.robot_alt
-
-        if not gps_valid:
-            return (x_fwd, y_left, z_up)
-
-        heading = self.robot_heading if self.heading_valid else 0.0
-
-        # Step 1: body → ENU
-        east, north, up = self._body_to_enu(
-            x_fwd, y_left, z_up, heading
-        )
-
-        # Step 2: ENU metres → degree offsets
-        lat_rad = math.radians(robot_lat)
-        d_lat = north / _R_EARTH * (180.0 / math.pi)
-        d_lon = east / (_R_EARTH * math.cos(lat_rad)) * (180.0 / math.pi)
-
-        # Step 3: add to current robot position
-        lat = robot_lat + d_lat
-        lon = robot_lon + d_lon
-        alt = robot_alt + up
-
-        return (lon, lat, alt)  # GeoJSON order: [lon, lat, alt]
-
-    @staticmethod
-    def _geometry_type_for_class(class_name: str) -> str:
-        """Point for person classes, LineString for fence/wall, else Polygon."""
-        if class_name in _POINT_CLASSES:
-            return 'Point'
-        if class_name in _LINE_CLASSES:
-            return 'LineString'
-        return 'Polygon'
-
-    def detections_to_geojson(self, detections, source='ugv',
-                               detection_type='seg'):
-        """Build a GeoJSON FeatureCollection; altitude goes in altitude_m,
-        coordinates stay 2D [lon, lat] per RFC 7946."""
-        features = []
-        for det in detections:
-            lon, lat, alt = det['coordinates']
-            sx, sy, sz = det.get('size', (0.0, 0.0, 0.0))
-            pos_x, pos_y, pos_z = det.get('position', (0.0, 0.0, 0.0))
-
-            class_name = det.get('class_name', 'unknown')
-            geom_type = self._geometry_type_for_class(class_name)
-
-            if geom_type == 'Point':
-                # Point: just the centre position in [lon, lat]
-                geometry = {
-                    "type": "Point",
-                    "coordinates": [lon, lat],
-                }
-
-            elif geom_type == 'LineString':
-                # LineString: centre-line along the longer bbox axis
-                half_long = max(sx, sy, _MIN_EXTENT) / 2.0
-                if sx >= sy:
-                    # longer along X (forward)
-                    endpoints = [
-                        list(self.body_to_gps(pos_x + half_long, pos_y, pos_z))[:2],
-                        list(self.body_to_gps(pos_x - half_long, pos_y, pos_z))[:2],
-                    ]
-                else:
-                    # longer along Y (left-right)
-                    endpoints = [
-                        list(self.body_to_gps(pos_x, pos_y + half_long, pos_z))[:2],
-                        list(self.body_to_gps(pos_x, pos_y - half_long, pos_z))[:2],
-                    ]
-                geometry = {
-                    "type": "LineString",
-                    "coordinates": endpoints,
-                }
-
-            else:  # Polygon (default)
-                # Build polygon from body-frame corners, each
-                # individually converted to GPS via body_to_gps.
-                # Use minimum extent so a zero dimension still
-                # produces a visible polygon (not a degenerate line).
-                half_x = max(sx, _MIN_EXTENT) / 2.0
-                half_y = max(sy, _MIN_EXTENT) / 2.0
-                body_corners = [
-                    (pos_x + half_x, pos_y + half_y, pos_z),
-                    (pos_x + half_x, pos_y - half_y, pos_z),
-                    (pos_x - half_x, pos_y - half_y, pos_z),
-                    (pos_x - half_x, pos_y + half_y, pos_z),
-                ]
-                ring = [list(self.body_to_gps(cx, cy, cz))[:2]
-                        for cx, cy, cz in body_corners]
-                ring.append(ring[0])  # close the ring (RFC-7946)
-                geometry = {
-                    "type": "Polygon",
-                    "coordinates": [ring],
-                }
-
-            feature = {
-                "type": "Feature",
-                "id": det.get('track_id', ''),
-                "geometry": geometry,
-                "properties": {
-                    "class": class_name,
-                    "id": det.get('track_id', ''),
-                    "confidence": det.get('confidence', 0.0),
-                    "category": self._class_category(class_name),
-                    "detection_type": detection_type,
-                    "source": source,
-                    "local_frame": not self.gps_valid,
-                    "altitude_m": round(alt, 2),
-                    "height_m": round(float(sz), 2),
-                    "marker-color": self._class_color(class_name),
-                    "marker-size": "medium",
-                    "marker-symbol": self._class_symbol(class_name),
-                }
-            }
-            # SimpleStyle: stroke/fill for Polygon, stroke for LineString
-            if geometry['type'] == 'Polygon':
-                feature["properties"]["stroke"] = feature["properties"]["marker-color"]
-                feature["properties"]["stroke-width"] = 2
-                feature["properties"]["stroke-opacity"] = 1.0
-                feature["properties"]["fill"] = feature["properties"]["marker-color"]
-                feature["properties"]["fill-opacity"] = 0.25
-            elif geometry['type'] == 'LineString':
-                feature["properties"]["stroke"] = feature["properties"]["marker-color"]
-                feature["properties"]["stroke-width"] = 2
-                feature["properties"]["stroke-opacity"] = 1.0
-            features.append(feature)
-
-        return {
-            "type": "FeatureCollection",
-            "features": features
-        }
-
-    #  Detection callback
     def ugv_callback(self, msg: Detection3DArray):
         """Process UGV 3D detections (b2/base_link) → GeoJSON."""
         detections = []
@@ -770,7 +88,7 @@ class GeoJSONBridge(Node):
             sz = det.bbox.size.z
 
             # Convert body-frame centre to GPS [lon, lat, alt]
-            lon, lat, alt = self.body_to_gps(x, y, z)
+            lon, lat, alt = self.position.body_to_gps(x, y, z)
 
             # Extract class and confidence
             class_name = 'unknown'
@@ -791,14 +109,14 @@ class GeoJSONBridge(Node):
         if not detections:
             return
 
-        if not self.gps_valid:
+        if not self.position.gps_valid:
             self.get_logger().warn(
                 'No UGV global position — publishing with local_frame=true '
                 '(body-frame coords).',
                 throttle_duration_sec=5.0,
             )
 
-        geojson = self.detections_to_geojson(
+        geojson = self.formatter.detections_to_geojson(
             detections, source='ugv', detection_type='seg',
         )
         geojson['features'] = _deduplicate_features(
@@ -826,12 +144,7 @@ class GeoJSONBridge(Node):
                 copied.setdefault('properties', {})['frame_stamp'] = stamp_key
                 target_geojson['features'].append(copied)
 
-            with self._position_lock:
-                gps_valid = self.gps_valid
-                robot_lat = self.robot_lat
-                robot_lon = self.robot_lon
-                robot_alt = self.robot_alt
-                position_source = self._position_source
+            gps_valid, robot_lat, robot_lon, robot_alt, position_source = self.position.snapshot()
 
             if gps_valid:
                 target_geojson['features'].append({
@@ -875,7 +188,6 @@ class GeoJSONBridge(Node):
         )
         self._publish(geojson)
 
-    #  Publishing
     def _publish(self, geojson: dict):
         """Publish GeoJSON to the ROS2 topic (per frame)."""
         msg = String()
@@ -887,7 +199,6 @@ class GeoJSONBridge(Node):
             throttle_duration_sec=1.0,
         )
 
-    #  Periodic flush (timer)
     def _periodic_flush(self):
         """Flush the accumulated feature set: disk snapshot and/or API
         upload, each independently controlled by its parameter."""
@@ -931,273 +242,7 @@ class GeoJSONBridge(Node):
             collection = self._api_queue.get()
             if collection is None:
                 return
-            self._send_to_api(collection)
-
-    def _api_request(self, url: str, method: str, feature=None):
-        """One JSON request to the TELESTO Map Manager. Returns the parsed
-        response body (dict) or None on failure."""
-        data = None
-        headers = {}
-        if feature is not None:
-            data = json.dumps({
-                'geometry': feature.get('geometry'),
-                'properties': feature.get('properties'),
-            }).encode('utf-8')
-            headers['Content-Type'] = 'application/json'
-        req = Request(url, data=data, method=method, headers=headers)
-        with urlopen(req, timeout=5) as resp:
-            if resp.status not in (200, 201):
-                self.get_logger().warn(
-                    f'API {method} returned {resp.status}'
-                )
-                return None
-            try:
-                return json.loads(resp.read().decode('utf-8'))
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                return {}
-
-    def _send_to_api(self, collection: dict):
-        """Upsert to TELESTO: PUT always creates a new POI, so blindly
-        re-PUTting every flush would duplicate features server-side.
-        Instead: GET remote, PUT if nothing nearby of the same class,
-        PATCH if ours is better, else skip. Local-frame features (no GPS
-        yet) can't be geo-compared, so they PUT once per track and get
-        remembered to avoid repeat uploads.
-        """
-        features = collection.get('features', [])
-        if not features:
-            return
-
-        try:
-            remote = self._api_request(self.api_url, 'GET') or {}
-            remote_features = remote.get('features', [])
-        except (URLError, OSError) as e:
-            self.get_logger().warn(
-                f'API GET failed — skipping this flush (no safe dedup): {e}',
-                throttle_duration_sec=10.0,
-            )
-            return
-
-        # (class, centroid, confidence, poi_id) snapshot of the remote set;
-        # successful PUTs are appended so one flush can't self-duplicate.
-        remote_index = []
-        for rf in remote_features:
-            centroid = _feature_centroid(rf)
-            if centroid is None:
-                continue
-            props = rf.get('properties', {})
-            remote_index.append((
-                str(props.get('class', '')).lower(),
-                centroid,
-                float(props.get('confidence', 0.0)),
-                rf.get('id'),
-            ))
-
-        created = updated = skipped = errors = 0
-        for feature in features:
-            props = feature.get('properties', {})
-            centroid = _feature_centroid(feature)
-            try:
-                if props.get('local_frame', False) or centroid is None:
-                    key = (props.get('class', ''), props.get('id', ''))
-                    if key in self._uploaded_local_ids:
-                        skipped += 1
-                        continue
-                    self._api_request(self.api_url, 'PUT', feature)
-                    self._uploaded_local_ids.add(key)
-                    created += 1
-                    continue
-
-                cls = str(props.get('class', '')).lower()
-                conf = float(props.get('confidence', 0.0))
-                best = None
-                best_dist = float('inf')
-                for i, (r_cls, r_centroid, r_conf, r_id) in enumerate(remote_index):
-                    if r_cls != cls:
-                        continue
-                    d = _haversine_m(centroid[0], centroid[1],
-                                     r_centroid[0], r_centroid[1])
-                    if d < self._dedup_radius_m and d < best_dist:
-                        best_dist = d
-                        best = i
-
-                if best is None:
-                    resp = self._api_request(self.api_url, 'PUT', feature)
-                    poi_id = (resp or {}).get('id')
-                    remote_index.append((cls, centroid, conf, poi_id))
-                    created += 1
-                elif conf > remote_index[best][2]:
-                    poi_id = remote_index[best][3]
-                    if poi_id:
-                        self._api_request(
-                            f'{self.api_url}/{poi_id}', 'PATCH', feature,
-                        )
-                    remote_index[best] = (cls, centroid, conf, poi_id)
-                    updated += 1
-                else:
-                    skipped += 1
-            except (URLError, OSError) as e:
-                errors += 1
-                self.get_logger().warn(
-                    f'API upsert failed for a feature: {e}',
-                    throttle_duration_sec=10.0,
-                )
-            except Exception as e:
-                errors += 1
-                self.get_logger().error(f'API upsert error: {e}')
-
-        self.get_logger().info(
-            f'API upsert: created={created} updated={updated} '
-            f'skipped={skipped} errors={errors}',
-            throttle_duration_sec=10.0,
-        )
-
-
-    #  SimpleStyle helpers
-    @staticmethod
-    def _class_color(class_name: str) -> str:
-
-        colors = {
-            # Fire / hazard (reds)
-            'flame': '#ff0000',
-            'smoke': '#ff4500',
-            'burnt tree': '#8b0000',
-            'burnt grass': '#a52a2a',
-            'burnt plant': '#b22222',
-            'fire hose': '#dc143c',
-            'fire hydrant': '#ff6347',
-            'fire truck': '#ff0000',
-            'extinguisher': '#ff1493',
-            # People (blues)
-            'first responder': '#1e90ff',
-            'citizen': '#4169e1',
-            'military personnel': '#000080',
-            # Vehicles (dark blues)
-            'civilian vehicle': '#0000ff',
-            'destroyed vehicle': '#00008b',
-            'ambulance': '#4682b4',
-            'police vehicle': '#191970',
-            'army vehicle': '#2f4f4f',
-            'boat': '#5f9ea0',
-            'bicycle': '#00ff00',
-            'aerial vehicle': '#87ceeb',
-            # Nature (greens)
-            'green tree': '#228b22',
-            'green plant': '#32cd32',
-            'green grass': '#7cfc00',
-            'dry tree': '#daa520',
-            'dry grass': '#bdb76b',
-            'dry plant': '#f0e68c',
-            'animal': '#ff8c00',
-            # Infrastructure (greys)
-            'building': '#708090',
-            'destroyed building': '#696969',
-            'wall': '#808080',
-            'road': '#a9a9a9',
-            'pavement': '#c0c0c0',
-            'dirt road': '#d2b48c',
-            'window': '#b0c4de',
-            'door': '#8b4513',
-            'stairs': '#a0522d',
-            'pole': '#778899',
-            'tower': '#556b2f',
-            'silo': '#6b8e23',
-            # Obstacles (oranges / yellows)
-            'debris': '#ff8c00',
-            'fence': '#daa520',
-            'barrier': '#ffd700',
-            'cone': '#ff7f50',
-            'hole in the ground': '#8b4513',
-            'mud': '#a0522d',
-            'water': '#00bfff',
-            # Equipment (purples)
-            'helmet': '#9370db',
-            'scba': '#8a2be2',
-            'boot': '#4b0082',
-            'mask': '#9400d3',
-            'glove': '#da70d6',
-            'protective glasses': '#ba55d3',
-            'ladder': '#ff8c00',
-            'ax': '#cd853f',
-            'shovel': '#d2691e',
-            'chainsaw': '#b8860b',
-            'bag': '#bc8f8f',
-            'barrel': '#8b8682',
-            'furniture': '#deb887',
-            'tank': '#2e8b57',
-            'crane': '#b8860b',
-            'excavator': '#daa520',
-            'lifesaver': '#ff4500',
-        }
-        return colors.get(class_name, '#808080')
-
-    @staticmethod
-    def _class_category(class_name: str) -> str:
-
-        categories = {
-            # Hazard
-            'flame': 'hazard', 'smoke': 'hazard',
-            'burnt tree': 'hazard', 'burnt grass': 'hazard', 'burnt plant': 'hazard',
-            # People
-            'first responder': 'person', 'citizen': 'person',
-            'military personnel': 'person',
-            # Vehicles
-            'civilian vehicle': 'vehicle', 'destroyed vehicle': 'vehicle',
-            'ambulance': 'vehicle', 'police vehicle': 'vehicle',
-            'fire truck': 'vehicle', 'army vehicle': 'vehicle',
-            'boat': 'vehicle', 'bicycle': 'vehicle', 'aerial vehicle': 'vehicle',
-            # Nature
-            'green tree': 'nature', 'green plant': 'nature',
-            'green grass': 'nature', 'dry tree': 'nature',
-            'dry grass': 'nature', 'dry plant': 'nature', 'animal': 'nature',
-            # Infrastructure
-            'building': 'infrastructure', 'destroyed building': 'infrastructure',
-            'wall': 'infrastructure', 'road': 'infrastructure',
-            'pavement': 'infrastructure', 'dirt road': 'infrastructure',
-            'window': 'infrastructure', 'door': 'infrastructure',
-            'stairs': 'infrastructure', 'pole': 'infrastructure',
-            'tower': 'infrastructure', 'silo': 'infrastructure',
-            # Obstacle
-            'debris': 'obstacle', 'fence': 'obstacle', 'barrier': 'obstacle',
-            'cone': 'obstacle', 'hole in the ground': 'obstacle',
-            'mud': 'obstacle', 'water': 'obstacle',
-            # Equipment
-            'fire hose': 'equipment', 'fire hydrant': 'equipment',
-            'extinguisher': 'equipment', 'helmet': 'equipment',
-            'scba': 'equipment', 'boot': 'equipment', 'mask': 'equipment',
-            'glove': 'equipment', 'protective glasses': 'equipment',
-            'ladder': 'equipment', 'ax': 'equipment', 'shovel': 'equipment',
-            'chainsaw': 'equipment', 'bag': 'equipment', 'barrel': 'equipment',
-            'furniture': 'equipment', 'tank': 'equipment', 'crane': 'equipment',
-            'excavator': 'equipment', 'lifesaver': 'equipment',
-        }
-        return categories.get(class_name, 'unknown')
-
-    @staticmethod
-    def _class_symbol(class_name: str) -> str:
-
-        symbols = {
-            'first responder': 'pitch',
-            'citizen': 'pitch',
-            'military personnel': 'pitch',
-            'civilian vehicle': 'car',
-            'destroyed vehicle': 'car',
-            'ambulance': 'hospital',
-            'police vehicle': 'police',
-            'fire truck': 'fire-station',
-            'army vehicle': 'car',
-            'boat': 'harbor',
-            'bicycle': 'bicycle',
-            'aerial vehicle': 'airfield',
-            'flame': 'fire-station',
-            'smoke': 'fire-station',
-            'building': 'building',
-            'destroyed building': 'building',
-            'water': 'water',
-            'animal': 'dog-park',
-        }
-        return symbols.get(class_name, 'marker')
-
+            self.delivery._send_to_api(collection)
 
 def main(args=None):
     rclpy.init(args=args)
@@ -1209,7 +254,7 @@ def main(args=None):
         pass
     finally:
         if node is not None:
-            node._position_stop.set()
+            node.position.close()
             if node._api_worker is not None:
                 # Best-effort worker stop: clear any queued snapshot and
                 # deliver the shutdown sentinel (worker is a daemon, so a
