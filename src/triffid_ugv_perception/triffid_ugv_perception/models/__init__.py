@@ -34,3 +34,42 @@ def create_detector(config) -> DetectionBackend:
 
 register_detector('sansa', _sansa)
 register_detector('yolo', _yolo)
+
+
+def _devit(config):
+    from .devit import DevitDetector
+    return DevitDetector(config)
+
+register_detector("devit", _devit)
+
+
+def _sine(config):
+    from .sine import SineDetector
+    return SineDetector(config)
+
+register_detector("sine", _sine)
+
+
+def _cosine(config):
+    from .cosine import CosineDetector
+    return CosineDetector(config)
+
+register_detector('cosine', _cosine)
+
+def _pet(config):
+    from .pet_dino import PetDinoDetector
+    return PetDinoDetector(config)
+
+register_detector('pet_dino', _pet)
+
+def _opus(config):
+    from .opus import OpusDetector
+    return OpusDetector(config)
+
+register_detector('opus', _opus)
+
+def _yoloe(config):
+    from .yoloe import YoloeDetector
+    return YoloeDetector(config)
+
+register_detector('yoloe', _yoloe)

@@ -1,12 +1,17 @@
 """Thermal snapshots, semantic labels and track overlays; no inference or localization."""
-import os
 import cv2
 import numpy as np
+import zlib
 from sensor_msgs.msg import Image
+from .storage import BoundedImageWriter
 
 class DebugPublisher:
     def __init__(self, node, bridge):
         self.node, self.bridge = node, bridge
+        limits = dict(max_files=int(node.get_parameter('debug_max_files').value),
+                      max_bytes=int(node.get_parameter('debug_max_bytes').value))
+        self.rgb_writer = BoundedImageWriter(node.debug_frames_dir,'detection',**limits)
+        self.thermal_writer = BoundedImageWriter(node.thermal_frames_dir,'thermal',**limits)
         self._last_debug_save_stamp = None
         self._last_thermal_save_stamp = None
         self.thermal_frames_received = 0
@@ -76,12 +81,11 @@ class DebugPublisher:
                 f'thermal_{msg.header.stamp.sec}_'
                 f'{msg.header.stamp.nanosec:09d}.png'
             )
-            path = os.path.join(self.node.thermal_frames_dir, filename)
-            if cv2.imwrite(path, debug_thermal):
+            if self.thermal_writer.write(filename, debug_thermal):
                 self._last_thermal_save_stamp = stamp_s
             else:
                 self.node.get_logger().warn(
-                    f'Failed to save thermal debug frame: {path}',
+                    f'Failed to save thermal debug frame: {filename}',
                     throttle_duration_sec=5.0,
                 )
         except Exception as e:
@@ -124,7 +128,10 @@ class DebugPublisher:
             if bbox is None:
                 continue
             x1, y1, x2, y2 = [int(v) for v in bbox]
-            tid = int(t.get('track_id', -1))
+            track_id=str(t.get('track_id',-1))
+            try:tid=int(track_id)
+            except ValueError:tid=zlib.crc32(track_id.encode())
+            display_id=track_id.rsplit(':',1)[-1]
             cls = t.get('class_name', 'unknown')
             conf = float(t.get('confidence', 0.0))
             npts = int(t.get('n_depth_pts', 0))
@@ -136,7 +143,7 @@ class DebugPublisher:
                 int((173 * tid) % 255),
             )
             cv2.rectangle(dbg, (x1, y1), (x2, y2), color, 2)
-            label = f'{cls} #{tid} {conf:.2f} d={npts}'
+            label = f'{cls} #{display_id} {conf:.2f} d={npts}'
             ytxt = max(18, y1 - 6)
             cv2.putText(
                 dbg, label, (x1, ytxt),
@@ -158,12 +165,11 @@ class DebugPublisher:
                     f'detection_{header.stamp.sec}_'
                     f'{header.stamp.nanosec:09d}.png'
                 )
-                path = os.path.join(self.node.debug_frames_dir, filename)
-                if cv2.imwrite(path, dbg):
+                if self.rgb_writer.write(filename, dbg):
                     self._last_debug_save_stamp = stamp_s
                 else:
                     self.node.get_logger().warn(
-                        f'Failed to save debug detection frame: {path}',
+                        f'Failed to save debug detection frame: {filename}',
                         throttle_duration_sec=5.0,
                     )
 

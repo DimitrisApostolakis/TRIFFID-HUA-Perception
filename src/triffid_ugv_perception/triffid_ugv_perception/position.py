@@ -69,13 +69,16 @@ class PositionProvider:
 
         self.robot_heading = 0.0
         self.heading_valid = False
+        self._fix_received_monotonic = None
+        self._heading_received_monotonic = None
+        self._fix_stamp_ns = self._status_stamp_ns = None
 
         self.sub_status = None
         if UnitreeStatus is not None:
             self.sub_status = self.node.create_subscription(
                 UnitreeStatus,
                 self.ugv_status_topic,
-                self.ugv_status_callback,
+                self._receive_status,
                 10,
             )
         else:
@@ -87,13 +90,13 @@ class PositionProvider:
         self.sub_gps = self.node.create_subscription(
             NavSatFix,
             '/fix',
-            self.gps_callback,
+            self._receive_fix,
             10,
         )
         self.sub_heading = self.node.create_subscription(
             Float32,
-            '/b2/nicla/magnetometer/heading_broadcasted',
-            self.heading_callback,
+            node.get_parameter('heading_topic').value,
+            self._receive_heading,
             QoSProfile(
                 history=HistoryPolicy.KEEP_LAST,
                 depth=5,
@@ -345,6 +348,55 @@ class PositionProvider:
                 f'Using /fix fallback: ({fix_lat:.7f}, {fix_lon:.7f}, '
                 f'{fix_alt:.1f}m)'
             )
+
+    @staticmethod
+    def _message_stamp(msg):
+        header = getattr(msg,'header',None)
+        stamp = getattr(header,'stamp',None)
+        return stamp.sec*10**9+stamp.nanosec if stamp else None
+
+    def _receive_status(self, msg):
+        self.ugv_status_callback(msg)
+        self._status_stamp_ns = self._message_stamp(msg)
+
+    def _receive_fix(self, msg):
+        try:
+            valid = self._valid_lat_lon(float(msg.latitude),float(msg.longitude))
+            valid = valid and getattr(getattr(msg,'status',None),'status',0) >= 0
+        except (TypeError,ValueError,AttributeError):
+            valid = False
+        if valid:
+            self.gps_callback(msg)
+            self._fix_received_monotonic = time.monotonic()
+            self._fix_stamp_ns = self._message_stamp(msg)
+        else:
+            self._fix_received_monotonic = None
+
+    def _receive_heading(self, msg):
+        if math.isfinite(float(msg.data)):
+            self.heading_callback(msg)
+            self._heading_received_monotonic = time.monotonic()
+        else:
+            self._heading_received_monotonic = None
+
+    def upload_location_ready(self, timestamp_ns):
+        """Check input freshness; Float32 heading only supports receipt age."""
+        now = time.monotonic()
+        gps_timeout = float(self.node.get_parameter('upload_gps_timeout_s').value)
+        heading_timeout = float(self.node.get_parameter('upload_heading_timeout_s').value)
+        with self._position_lock:
+            source = self._position_source
+            valid = self.gps_valid and self.heading_valid and math.isfinite(self.robot_heading)
+            received = (self._status_received_monotonic if source=='ugv_status' else
+                        self._fix_received_monotonic if source=='fix' else None)
+            stamp = self._status_stamp_ns if source=='ugv_status' else self._fix_stamp_ns
+        if not valid or received is None or self._heading_received_monotonic is None:
+            return False
+        if not 0 <= now-received <= gps_timeout or not 0 <= now-self._heading_received_monotonic <= heading_timeout:
+            return False
+        if stamp is not None and abs(int(timestamp_ns)-stamp) > gps_timeout*1e9:
+            return False
+        return True
 
     def heading_callback(self, msg: Float32):
         """Normalize compass heading to [-pi, pi), keeping clockwise-positive."""

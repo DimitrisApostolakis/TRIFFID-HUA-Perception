@@ -9,25 +9,39 @@
 | in | `thermal_image_topic` (default `/b2/camera_flir/image_raw_broadcasted`) | `sensor_msgs/Image` | debug snapshots only |
 | in | `/b2/ugv_status` | `ugv_status_interfaces/UnitreeStatus` | primary position when installed, valid and fresh |
 | in | `/fix` | `sensor_msgs/NavSatFix` | filtered position fallback |
-| in | `/b2/nicla/magnetometer/heading_broadcasted` | `std_msgs/Float32` | compass heading in degrees |
+| in | `/b2/nicla/magnetometer/heading` | `std_msgs/Float32` | compass heading in degrees |
 | out | `/ugv/detections/front/detections_3d` | `vision_msgs/Detection3DArray` | frame `b2/base_link` |
 | out | `/ugv/detections/front/segmentation` | `sensor_msgs/Image` | mono8, class ID + 1; 0 is background |
 | out | `/ugv/detections/front/debug_image` | `sensor_msgs/Image` | bgr8 overlays |
-| out | `/ugv/detections/front/geojson` | `std_msgs/String` | per-frame FeatureCollection |
+| out | `/ugv/detections/front/geojson` | `std_msgs/String` | per-frame FeatureCollection; persistent object UUID after confirmation |
+| out | `/ugv/detections/front/discovery_status` | `std_msgs/String` | bounded registry/outbox counts and capacity pressure |
+| out | `/ugv/detections/front/tracked_observations` | `std_msgs/String` | live MASA profile: bounded image boxes, 256-D appearance, body-frame positions and session-scoped track IDs |
+| out | `/ugv/detections/front/pipeline_status` | `std_msgs/String` | live worker timing, received/replaced/stale/failed counters and bounded pending-frame count |
 
-Calibration and geometry retain the topic-update branch's fixed RealSense
-intrinsics and optical-to-body axis mapping. Position priority is fresh ROS status,
-HTTP position API, filtered `/fix`, then parameter seed. See the
+Localization requires matching CameraInfo, synchronized aligned depth and recorded
+optical-to-body TF. Position priority is fresh ROS status, optional HTTP position
+API (disabled by default), filtered `/fix`, then parameter seed. Creation eligibility
+requires fresh GPS and heading; per-frame geometry is null while they are missing. See the
 [UGV module documentation](src/triffid_ugv_perception/README.md).
 
 ## Detection3DArray Fields
 
 `bbox.center.position` = 3D centroid, `bbox.size` = extent, both in `b2/base_link` (X=fwd, Y=left, Z=up).
-`results[0].hypothesis.class_id` = class name (string), `.score` = backend confidence (SANSA: mean foreground probability per connected component, not calibrated YOLO confidence). `id` = persistent track id (string).
+`results[0].hypothesis.class_id` = class name (string), `.score` = backend confidence (SANSA: mean foreground probability per connected component, not calibrated YOLO confidence). `id` = tracker-local ID (string); the discovery registry assigns a separate persistent object UUID.
+
+The YOLOE/MASA live profile uses native YOLOE object confidence. Its tracker IDs are
+opaque `<session_uuid>:<masa_id>` strings. The richer observation topic uses schema
+`triffid.ugv.tracked-observations.v1`, original-image `bbox` in xyxy pixels, body-frame
+`position`/`extent` in metres, capture-header `timestamp_ns`, and an explicit
+`MASA-R50:<checkpoint_sha256>` embedding space. Masks are excluded from this topic.
+GeoJSONBridge consumes this topic exclusively in the live profile so appearance
+re-identification evidence is preserved and the parallel Detection3DArray stream
+does not create duplicate registry updates. See [live deployment](docs/UGV_LIVE_YOLOE_MASA.md).
 
 ## GeoJSON Feature Schema
 
-Both UGV (`/ugv/detections/front/geojson`) and UAV output use this shape.
+UGV `/ugv/detections/front/geojson` uses this Feature shape. UAV Python
+output has a separate pixel-observation schema described below.
 
 ```json
 {
@@ -53,21 +67,31 @@ Both UGV (`/ugv/detections/front/geojson`) and UAV output use this shape.
 }
 ```
 
-`stroke*` on Polygon/LineString, `fill*` on Polygon only. `coordinates` are
-`[lon, lat]` (UGV — RFC 7946) or `[x, y]` pixels (UAV — see below).
+`stroke*` applies to Polygon/LineString and `fill*` to Polygon. Geographic
+coordinates use `[longitude, latitude]`. UGV geometry is null while its valid
+location/heading gate fails.
 
-## UAV Feature Differences
+## UAV Observation Schema
 
-- `geometry.type` is `Point` (1 sample) or `MultiPoint` (multiple independent
-  raycast samples — never `LineString`/`Polygon`, no closure/ordering implied).
-- `coordinates` are pixels in the original frame, origin top-left.
-- `properties` additionally carry `class_id`, `frame_index`, `timestamp_s`,
-  `coordinate_space: "pixel"`, `classes_txt_geometry` (the table below,
-  informational — controls sample count, not `geometry.type`), and, when an
-  SRT sidecar is present: `drone_latitude`, `drone_longitude`,
-  `drone_altitude_m`, `drone_rel_altitude_m`, `gimbal_yaw`, `gimbal_pitch`,
-  `gimbal_roll` (camera pose for that frame, not the detection's position).
-- No `stroke`/`fill`/`local_frame`/`height_m`/`altitude_m`.
+The Python exporter writes `triffid.uav.observations.v1`, not geographic GeoJSON.
+The document identifies `coordinate_space: "original_image_pixels"`, a top-left
+pixel origin, a class catalogue, model metadata and `sources` containing the
+image dimensions, telemetry/projection context and observations.
+
+Each observation contains `observation_id`, `class_id`, `class_name`,
+`target_geometry` (`Point` or `Polygon`), `bbox_xyxy`, `centroid_xy`,
+`raycast_point_xy`, `area_px`, and an exact cropped binary mask. The mask uses
+`binary_rle_row_major` with `size_hw`, alternating background/foreground
+`counts`, and `offset_xy`; it is not COCO column-major RLE. `score` is null
+when unavailable; an exposed mean foreground probability is uncalibrated.
+
+`point_detections.json` supplies point observations; `polygon_segmentations.json`
+supplies surface masks. Optional offline MASA output adds tracking metadata and
+can export one representative observation per confirmed identity. Observation
+IDs alone are not persistent world-object IDs. A separate Unity projector uses
+the matching capture camera and mesh collider to produce geographic GeoJSON.
+See [UAV architecture](docs/UAV_ARCHITECTURE.md) and the
+[UAV CLI/output guide](src/triffid_uav_perception/README.md).
 
 ## Class List (63 classes)
 
@@ -145,3 +169,12 @@ other classes are Point. UAV geometry is independent of this UGV policy.
 `https://crispres.com/wp-json/map-manager/v1/features` — `GET` (list),
 `PUT` (create, body `{"geometry", "properties"}`, returns server `id`),
 `PATCH /features/{id}` (update), `DELETE /features/{id}`.
+
+Automatic UGV delivery defaults to disabled. The live profile supports full-Feature
+PUT creation and PATCH updates of the mapped POI. Re-ID retains the persistent
+client UUID; meaningful changes coalesce with a two-second per-object PATCH limit.
+The legacy profile remains creation-only. Network creation retries require the
+server to enforce unique `(namespace, client_object_id)` and replay the original
+remote ID; this contract has not been verified on the backend. See
+[UGV API delivery](docs/UGV_API_DELIVERY.md) for request formats, thresholds,
+durability and deployment gating.

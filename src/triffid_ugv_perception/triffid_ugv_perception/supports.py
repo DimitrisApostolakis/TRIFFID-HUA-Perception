@@ -1,4 +1,4 @@
-"""Shared, model-independent five-example UGV support bank.
+"""Shared, model-independent UGV support bank with up to 16 examples per class.
 
 The bank owns example identity and validation. The pipeline selects an immutable
 episode; each backend only performs its own image/mask tensor preprocessing.
@@ -16,7 +16,7 @@ from .io import write_json, read_rgb, write_rgb
 from .ontology import BY_ID, BY_NAME, CLASSES
 
 BANK_SCHEMA = 'triffid.ugv.support-bank.v1'
-EXAMPLES_PER_CLASS = 5
+EXAMPLES_PER_CLASS = 16
 
 
 def _sha256(path):
@@ -60,9 +60,10 @@ class SupportSelection:
     """Same ordered example identities for any backend, independent of its tensors."""
     bank_name: str
     manifest_sha256: str
-    shots: int
+    shots: int | str
     examples: tuple[tuple[int, tuple[Support, ...]], ...]
     fingerprints: tuple[tuple[str, str, str], ...]
+    capacity: int = EXAMPLES_PER_CLASS
 
     def for_class(self, item):
         for class_id, examples in self.examples:
@@ -80,7 +81,7 @@ class SupportSelection:
             'schema_version': BANK_SCHEMA, 'manifest': self.bank_name,
             'manifest_sha256': self.manifest_sha256, 'shots': self.shots,
             'selection_policy': 'first_k_in_manifest_order',
-            'examples_per_class': EXAMPLES_PER_CLASS,
+            'examples_per_class': self.capacity,
             'classes': {BY_ID[class_id].name: [
                 {'example_id': support.example_id, 'image_sha256': hashes[support.example_id][0],
                  'mask_sha256': hashes[support.example_id][1],
@@ -95,24 +96,23 @@ class SupportBank:
         if self.path.is_dir():
             self.path /= 'bank.json'
         self.data = json.loads(self.path.read_text(encoding='utf-8-sig'))
-        # Old manifest paths remain accepted, but storage must now contain five
-        # examples. Use --shots 1 to consume one without changing the bank.
+        # Legacy five-slot manifests remain readable for reproducibility.
         if not isinstance(self.data, dict) or self.data.get('schema_version') not in (
                 BANK_SCHEMA,):
             raise ValueError('Unsupported support bank schema')
         if not isinstance(self.data.get('classes'), dict):
             raise ValueError('Support bank must contain a classes object')
-        if self.data.get('examples_per_class', EXAMPLES_PER_CLASS) != EXAMPLES_PER_CLASS:
-            raise ValueError('The UGV bank must store 5 examples per class')
+        self.capacity=self.data.get('examples_per_class',5)
+        if type(self.capacity) is not int or self.capacity not in (5,EXAMPLES_PER_CLASS):
+            raise ValueError('The UGV bank must define 16 slots per class (legacy 5 accepted)')
         unknown = set(self.data['classes']) - set(BY_NAME)
         if unknown:
             raise ValueError(f'Unknown support bank classes: {sorted(unknown)}')
 
     def for_class(self, item):
         entries = self.data['classes'].get(item.name)
-        if not isinstance(entries, list) or len(entries) != EXAMPLES_PER_CLASS:
-            raise ValueError(f'{item.name}: bank must store exactly 5 support examples; '
-                             'use --shots 1 or --shots 5 to select from them')
+        if not isinstance(entries, list) or len(entries) != self.capacity:
+            raise ValueError(f'{item.name}: bank must store exactly {self.capacity} support slots')
         supports = []
         for index, entry in enumerate(entries, start=1):
             if not isinstance(entry, dict) or not all(
@@ -127,17 +127,20 @@ class SupportBank:
             supports.append(Support((self.path.parent / entry['image']).resolve(),
                                     (self.path.parent / entry['mask']).resolve(), value,
                                     f'{item.name}/{identifier}'))
-        if len({s.example_id for s in supports}) != EXAMPLES_PER_CLASS:
+        if len({s.example_id for s in supports}) != self.capacity:
             raise ValueError(f'{item.name}: support example IDs must be distinct')
-        if len({s.image for s in supports}) != EXAMPLES_PER_CLASS:
-            raise ValueError(f'{item.name}: provide 5 distinct support images, not repeated paths')
+        if len({s.image for s in supports}) != self.capacity:
+            raise ValueError(f'{item.name}: provide distinct support images, not repeated paths')
         return tuple(supports)
 
-    def _inspect(self, classes, shots=EXAMPLES_PER_CLASS):
+    def _inspect(self, classes, shots=None):
+        shots=self.capacity if shots is None else shots
         errors, fingerprints, valid = [], {}, 0
         for item in classes:
             try:
                 examples = self.for_class(item)[:shots]
+                if len(examples)!=shots:
+                    raise ValueError(f'{item.name}: requested {shots} shots exceeds this manifest capacity {self.capacity}')
             except ValueError as error:
                 errors.append(str(error))
                 continue
@@ -155,16 +158,18 @@ class SupportBank:
                     errors.append(str(error))
         return errors, fingerprints, valid
 
-    def validate(self, classes=CLASSES):
+    def validate(self, classes=CLASSES, shots=None):
         classes = tuple(classes)
-        errors, _, valid = self._inspect(classes)
+        if shots is not None and (type(shots) is not int or not 1<=shots<=EXAMPLES_PER_CLASS):
+            raise ValueError('shots must be an integer between 1 and 16')
+        errors, _, valid = self._inspect(classes,shots)
         return {'valid': not errors, 'manifest': str(self.path),
-                'class_count': len(classes), 'expected_examples': len(classes) * EXAMPLES_PER_CLASS,
+                'class_count': len(classes), 'expected_examples': len(classes) * (self.capacity if shots is None else shots),
                 'valid_examples': valid, 'errors': errors}
 
     def select(self, classes, shots=5):
-        if shots not in (1, 5) or isinstance(shots, bool):
-            raise ValueError('shots must be 1 or 5')
+        if type(shots) is not int or not 1<=shots<=EXAMPLES_PER_CLASS:
+            raise ValueError('shots must be an integer between 1 and 16')
         classes = tuple(classes)
         if not classes or len({item.id for item in classes}) != len(classes):
             raise ValueError('Select a nonempty set of distinct UGV classes')
@@ -174,7 +179,25 @@ class SupportBank:
         examples = tuple((item.id, self.for_class(item)[:shots]) for item in classes)
         selected_hashes = tuple((s.example_id, *fingerprints[s.example_id])
                                 for _, supports in examples for s in supports)
-        return SupportSelection(self.path.name, _sha256(self.path), shots, examples, selected_hashes)
+        return SupportSelection(self.path.name, _sha256(self.path), shots, examples, selected_hashes,self.capacity)
+
+    def select_available(self, classes):
+        """Select each class's valid populated prefix, up to the bank capacity."""
+        classes=tuple(classes)
+        if not classes or len({item.id for item in classes})!=len(classes):
+            raise ValueError('Select a nonempty set of distinct UGV classes')
+        selections=[]
+        for item in classes:
+            count=0
+            for support in self.for_class(item):
+                if not support.image.is_file() or not support.mask.is_file():break
+                count+=1
+            if not count:raise ValueError(f'{item.name}: no available supports')
+            selections.append(self.select([item],count))
+        if not selections:raise ValueError('Select a nonempty set of classes')
+        return SupportSelection(self.path.name,_sha256(self.path),'available',
+            tuple(row for selected in selections for row in selected.examples),
+            tuple(row for selected in selections for row in selected.fingerprints),self.capacity)
 
 
 def bank_template():
@@ -198,15 +221,34 @@ def initialize_bank(directory):
     return write_json(manifest, bank_template())
 
 
+def expand_bank(location):
+    """Expand a legacy manifest without changing or replacing any examples."""
+    path=Path(location)
+    if path.is_dir():path=path/'bank.json'
+    bank=SupportBank(path)
+    if bank.capacity==EXAMPLES_PER_CLASS:return path
+    expanded=bank_template()
+    for name,entries in bank.data['classes'].items():
+        if len(entries)!=bank.capacity:raise ValueError(f'{name}: malformed legacy slots')
+        expanded['classes'][name][:bank.capacity]=entries
+    updated=dict(bank.data,examples_per_class=EXAMPLES_PER_CLASS,classes=expanded['classes'])
+    raw=path.read_bytes()
+    archive=path.parent/'history'/('capacity16_'+hashlib.sha256(raw).hexdigest()[:12])/'bank.json'
+    archive.parent.mkdir(parents=True,exist_ok=True)
+    if not archive.exists():archive.write_bytes(raw)
+    return write_json(path,updated)
+
+
 def add_example(location, class_name, slot, image, mask, foreground_value=None):
     """Normalize one supplied example into an unoccupied managed bank slot."""
     bank = SupportBank(location)
     item = resolve_class(class_name)
     if isinstance(slot, bool) or slot not in range(1, EXAMPLES_PER_CLASS + 1):
-        raise ValueError('slot must be between 1 and 5')
-    if bank.data != bank_template():
-        raise ValueError('bank add requires the managed layout created by bank init; '
-                         'custom manifests can reference existing files directly')
+        raise ValueError('slot must be between 1 and 16')
+    if slot>bank.capacity:
+        raise ValueError('Expand the legacy bank to 16 slots before adding this slot')
+    if bank.data['classes'][item.name][slot-1] != bank_template()['classes'][item.name][slot-1]:
+        raise ValueError('Slot already contains a custom example; existing references were preserved')
     if foreground_value is not None and (not isinstance(foreground_value, int) or
                                           isinstance(foreground_value, bool) or foreground_value < 0):
         raise ValueError('foreground_value must be a nonnegative integer')

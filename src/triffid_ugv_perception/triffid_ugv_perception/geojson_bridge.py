@@ -1,248 +1,150 @@
-"""ROS bridge: subscriptions, publication, periodic snapshots and bounded upload queue."""
+"""ROS adapter for persistent discovery identities and durable PUT/PATCH delivery."""
 import json
-import queue
-import threading
+import math
+from dataclasses import replace
 from pathlib import Path
+
 import rclpy
 from rclpy.node import Node
 from vision_msgs.msg import Detection3DArray
 from std_msgs.msg import String
+
 from .config import BRIDGE_PARAMETERS, declare_parameters
-from .position import PositionProvider
+from .discovery import DiscoveryService, DiscoverySettings
 from .geojson import GeoJSONFormatter
-from .delivery import FeatureDelivery
+from .ontology import BY_NAME
+from .position import PositionProvider
 from .storage import _atomic_write_geojson
-from .spatial import _deduplicate_features, _merge_features
+from .evidence import decode_packet
+
 
 class GeoJSONBridge(Node):
     def __init__(self):
         super().__init__('geojson_bridge')
-
-        declare_parameters(self, BRIDGE_PARAMETERS)
-
-        self.api_url = self.get_parameter('api_url').value
-        self.publish_to_api = self.get_parameter('publish_to_api').value
-        self.save_to_disk = self.get_parameter('save_to_disk').value
-        self.publish_period_s = float(self.get_parameter('publish_period_s').value)
-        self.output_dir = self.get_parameter('output_dir').value
-        self.target_geojson_stamp = int(
-            self.get_parameter('target_geojson_stamp').value
-        )
-
+        declare_parameters(self,BRIDGE_PARAMETERS)
+        value = lambda key:self.get_parameter(key).value
+        self.publish_to_api = bool(value('publish_to_api'))
+        self.save_to_disk = bool(value('save_to_disk'))
+        self.output_dir = Path(value('output_dir'))
+        self.target_geojson_stamp = int(value('target_geojson_stamp'))
+        self.snapshot_max_objects = int(value('snapshot_max_objects'))
+        self.snapshot_max_bytes = int(value('snapshot_max_bytes'))
+        if self.snapshot_max_objects < 1 or self.snapshot_max_bytes < 128:
+            raise ValueError('Snapshot limits must be positive (bytes >= 128)')
+        settings = DiscoverySettings(namespace=value('discovery_namespace'),
+            updates_enabled=bool(value('discovery_updates_enabled')),
+            update_interval_s=float(value('discovery_update_interval_s')),
+            update_distance_m=float(value('discovery_update_distance_m')),
+            update_altitude_m=float(value('discovery_update_altitude_m')),
+            update_confidence_delta=float(value('discovery_update_confidence_delta')),
+            embedding_space=value('discovery_embedding_space'),confirm_frames=int(value('discovery_confirm_frames')),
+            max_objects=int(value('discovery_max_objects')),max_pending=int(value('discovery_max_pending')),
+            max_pending_bytes=int(value('discovery_max_pending_bytes')),
+            max_database_bytes=int(value('discovery_max_database_bytes')),
+            flush_interval_s=float(value('discovery_flush_interval_s')))
+        self.rich_input=bool(value('use_rich_observations'))
+        self.rich_max_bytes=int(value('rich_max_payload_bytes'))
+        self._settings=settings
+        self._discovery_args=dict(api_enabled=self.publish_to_api,api_url=value('api_url'),
+            uniqueness_contract=bool(value('api_uuid_uniqueness_verified')))
+        self._discovery_path=value('discovery_db_path')
+        self.discovery=None
+        if not (self.rich_input and settings.embedding_space=='auto'):
+            self._open_discovery(settings.embedding_space)
         self.position = PositionProvider(self)
         self.formatter = GeoJSONFormatter(self.position)
+        self.sub_ugv = (self.create_subscription(String,'/ugv/detections/front/tracked_observations',self.rich_callback,1)
+            if self.rich_input else self.create_subscription(Detection3DArray,
+                '/ugv/detections/front/detections_3d',self.ugv_callback,10))
+        self.pub_geojson = self.create_publisher(String,'/ugv/detections/front/geojson',10)
+        self.pub_status = self.create_publisher(String,'/ugv/detections/front/discovery_status',10)
+        self.create_timer(float(value('publish_period_s')),self._periodic_flush)
+        mode = 'PUT/PATCH' if settings.updates_enabled else 'create-only'
+        self.get_logger().info(f'Persistent {mode} discovery ready; API '+('enabled' if self.publish_to_api else 'disabled'))
 
-        # Subscribers 
-        self.sub_ugv = self.create_subscription(
-            Detection3DArray,
-            '/ugv/detections/front/detections_3d',
-            self.ugv_callback,
-            10,
-        )
-        # Publishers
-        self.pub_geojson = self.create_publisher(
-            String,
-            '/ugv/detections/front/geojson',
-            10,
-        )
+    def _open_discovery(self,space):
+        self.discovery=DiscoveryService(self._discovery_path,replace(self._settings,embedding_space=space),**self._discovery_args)
 
-        outputs = []
-        if self.save_to_disk:
-            outputs.append(f'snapshot to {self.output_dir}/ugv_detections.geojson')
-        if self.publish_to_api:
-            outputs.append(f'PUT to {self.api_url}')
-        self.get_logger().info('GeoJSON Bridge started.')
-        self.get_logger().info(
-            f'  Every {self.publish_period_s}s: '
-            + (' AND '.join(outputs) if outputs
-               else 'nothing (both save_to_disk and publish_to_api are off)')
-        )
-        # Spatial deduplication radius (metres)
-        self._dedup_radius_m = float(self.get_parameter('dedup_radius_m').value)
+    def rich_callback(self,msg):
+        try:
+            packet=decode_packet(msg.data,self.rich_max_bytes)
+            expected=self.get_parameter('rich_target_frame').value
+            if packet['frame_id']!=expected:raise ValueError('Unexpected rich observation coordinate frame')
+            space=packet['embedding_space']
+            if self.discovery is None:self._open_discovery(space)
+            if self.discovery.settings.embedding_space!=space:raise ValueError('Appearance space changed; use a separate registry namespace/database')
+            tracks=packet['tracks'];detections=[]
+            for t in tracks:
+                x,y,z=t['position']
+                detections.append(dict(coordinates=self.position.body_to_gps(x,y,z),position=(x,y,z),size=t['extent'],
+                    class_name=t['class_name'],confidence=t['confidence'],track_id=t['track_id']))
+            self._process_tracks(tracks,detections,packet['timestamp_ns'])
+        except (ValueError,KeyError,TypeError) as error:
+            self.get_logger().error(f'Rich observation rejected: {str(error)[:256]}')
 
-        # API uploads run on one worker thread; depth-1 queue drops a
-        # stale pending snapshot instead of piling up threads.
-        self._accumulated = []
-        self.delivery = FeatureDelivery(self.api_url, self._dedup_radius_m, self.get_logger())
-        self._api_queue = queue.Queue(maxsize=1)
-        self._api_worker = None
-        if self.publish_to_api:
-            self._api_worker = threading.Thread(
-                target=self._api_worker_loop, daemon=True,
-            )
-            self._api_worker.start()
-        self.create_timer(self.publish_period_s, self._periodic_flush)
-
-    def ugv_callback(self, msg: Detection3DArray):
-        """Process UGV 3D detections (b2/base_link) → GeoJSON."""
-        detections = []
+    def ugv_callback(self, msg):
+        timestamp = int(msg.header.stamp.sec)*10**9+int(msg.header.stamp.nanosec)
+        detections, tracks = [], []
         for det in msg.detections:
-            # 3D position in b2/base_link (X=fwd, Y=left, Z=up)
-            x = det.bbox.center.position.x
-            y = det.bbox.center.position.y
-            z = det.bbox.center.position.z
+            if not det.results or not str(det.id):
+                continue
+            x,y,z = det.bbox.center.position.x,det.bbox.center.position.y,det.bbox.center.position.z
+            if not all(math.isfinite(v) for v in (x,y,z,det.results[0].hypothesis.score,
+                    det.bbox.size.x,det.bbox.size.y,det.bbox.size.z)):
+                continue
+            name = det.results[0].hypothesis.class_id
+            confidence = det.results[0].hypothesis.score
+            item = BY_NAME.get(str(name).lower())
+            tracks.append(dict(track_id=str(det.id),class_name=name,class_id=item.id if item else None,
+                               confidence=float(confidence)))
+            detections.append(dict(coordinates=self.position.body_to_gps(x,y,z),position=(x,y,z),
+                size=(det.bbox.size.x,det.bbox.size.y,det.bbox.size.z),class_name=name,
+                confidence=float(confidence),track_id=str(det.id)))
+        self._process_tracks(tracks,detections,timestamp)
 
-            # 3D bbox extent (metres)
-            sx = det.bbox.size.x
-            sy = det.bbox.size.y
-            sz = det.bbox.size.z
-
-            # Convert body-frame centre to GPS [lon, lat, alt]
-            lon, lat, alt = self.position.body_to_gps(x, y, z)
-
-            # Extract class and confidence
-            class_name = 'unknown'
-            confidence = 0.0
-            if det.results:
-                class_name = det.results[0].hypothesis.class_id
-                confidence = det.results[0].hypothesis.score
-
-            detections.append({
-                'coordinates': (lon, lat, alt),
-                'size': (sx, sy, sz),
-                'position': (x, y, z),
-                'class_name': class_name,
-                'confidence': confidence,
-                'track_id': det.id,
-            })
-
-        if not detections:
-            return
-
-        if not self.position.gps_valid:
-            self.get_logger().warn(
-                'No UGV global position — publishing with local_frame=true '
-                '(body-frame coords).',
-                throttle_duration_sec=5.0,
-            )
-
-        geojson = self.formatter.detections_to_geojson(
-            detections, source='ugv', detection_type='seg',
-        )
-        geojson['features'] = _deduplicate_features(
-            geojson['features'], self._dedup_radius_m
-        )
-
-        stamp_key = (
-            f'{msg.header.stamp.sec}_{msg.header.stamp.nanosec:09d}'
-        )
-        stamp_ns = (
-            int(msg.header.stamp.sec) * 1_000_000_000
-            + int(msg.header.stamp.nanosec)
-        )
-        if self.target_geojson_stamp and stamp_ns == self.target_geojson_stamp:
-            target_geojson = {
-                "type": "FeatureCollection",
-                "frame_stamp": {
-                    "sec": int(msg.header.stamp.sec),
-                    "nanosec": int(msg.header.stamp.nanosec),
-                },
-                "features": [],
-            }
-            for feature in geojson['features']:
-                copied = json.loads(json.dumps(feature))
-                copied.setdefault('properties', {})['frame_stamp'] = stamp_key
-                target_geojson['features'].append(copied)
-
-            gps_valid, robot_lat, robot_lon, robot_alt, position_source = self.position.snapshot()
-
-            if gps_valid:
-                target_geojson['features'].append({
-                    "type": "Feature",
-                    "id": "ugv",
-                    "geometry": {
-                        "type": "Point",
-                        "coordinates": [robot_lon, robot_lat],
-                    },
-                    "properties": {
-                        "class": "ugv",
-                        "source": "ugv_pose",
-                        "position_source": position_source,
-                        "local_frame": False,
-                        "altitude_m": round(float(robot_alt), 2),
-                        "frame_stamp": stamp_key,
-                        "marker-color": "#000000",
-                        "marker-size": "large",
-                        "marker-symbol": "car",
-                    },
-                })
-
-            target_path = (
-                Path(self.output_dir)
-                / f'ugv_detections_{stamp_key}.geojson'
-            )
-            try:
-                _atomic_write_geojson(target_path, target_geojson)
-                self.get_logger().info(
-                    f'Target-frame GeoJSON: '
-                    f'{len(target_geojson["features"])} features → '
-                    f'{target_path}'
-                )
-            except OSError as e:
-                self.get_logger().warn(
-                    f'Target-frame GeoJSON write failed: {e}'
-                )
-
-        self._accumulated = _merge_features(
-            self._accumulated, geojson['features'], self._dedup_radius_m,
-        )
-        self._publish(geojson)
-
-    def _publish(self, geojson: dict):
-        """Publish GeoJSON to the ROS2 topic (per frame)."""
-        msg = String()
-        msg.data = json.dumps(geojson, indent=2)
-        self.pub_geojson.publish(msg)
-
-        self.get_logger().info(
-            f'Published GeoJSON with {len(geojson["features"])} features',
-            throttle_duration_sec=1.0,
-        )
+    def _process_tracks(self,tracks,detections,timestamp):
+        ready=self.position.upload_location_ready(timestamp)
+        features = self.formatter.detections_to_geojson(detections,source='ugv',detection_type='seg')['features']
+        for feature in features:
+            feature['properties'].update(location_valid=ready,heading_valid=self.position.heading_valid,
+                                         location_quality='estimated' if ready else 'waiting_for_fresh_pose')
+        # Empty frames must reach the registry to reset unconfirmed tracks.
+        result, collection = self.discovery.process(tracks,features,timestamp)
+        output = String()
+        output.data = json.dumps(collection,allow_nan=False)
+        self.pub_geojson.publish(output)
+        if self.save_to_disk and self.target_geojson_stamp and timestamp==self.target_geojson_stamp:
+            path = self.output_dir/f'ugv_detections_{timestamp//10**9}_{timestamp%10**9:09d}.geojson'
+            self._save_snapshot(path,collection)
 
     def _periodic_flush(self):
-        """Flush the accumulated feature set: disk snapshot and/or API
-        upload, each independently controlled by its parameter."""
-        if not self._accumulated:
-            return
-        collection = {
-            "type": "FeatureCollection",
-            "features": list(self._accumulated),
-        }
+        if self.discovery is None:return
+        try:
+            self.discovery.registry.flush()
+            self.discovery.store.promote_ready()
+            self.discovery.store.housekeeping()
+        except Exception as error:
+            self.get_logger().warn(f'Discovery refresh paused: {str(error)[:256]}',throttle_duration_sec=10.)
+        status = self.discovery.status()
+        message = String()
+        message.data = json.dumps(status)
+        self.pub_status.publish(message)
+        if status['paused_reason']:
+            self.get_logger().warn(status['paused_reason'],throttle_duration_sec=10.)
         if self.save_to_disk:
-            path = Path(self.output_dir) / 'ugv_detections.geojson'
-            try:
-                _atomic_write_geojson(path, collection)
-                self.get_logger().info(
-                    f'Snapshot: {len(collection["features"])} features → {path}',
-                    throttle_duration_sec=30.0,
-                )
-            except OSError as e:
-                self.get_logger().warn(
-                    f'GeoJSON snapshot write failed: {e}',
-                    throttle_duration_sec=30.0,
-                )
-        if self.publish_to_api:
-            # Drop the stale queued snapshot (if any) — the newest one
-            # contains everything the older one did.
-            try:
-                self._api_queue.put_nowait(collection)
-            except queue.Full:
-                try:
-                    self._api_queue.get_nowait()
-                except queue.Empty:
-                    pass
-                try:
-                    self._api_queue.put_nowait(collection)
-                except queue.Full:
-                    pass
+            collection = self.discovery.store.snapshot(self.snapshot_max_objects,self.snapshot_max_bytes)
+            self._save_snapshot(self.output_dir/'ugv_detections.geojson',collection)
 
-    def _api_worker_loop(self):
-        """Single long-lived uploader; a None item is the shutdown sentinel."""
-        while True:
-            collection = self._api_queue.get()
-            if collection is None:
-                return
-            self.delivery._send_to_api(collection)
+    def _save_snapshot(self, path, collection):
+        try:
+            _atomic_write_geojson(path,collection,max_bytes=self.snapshot_max_bytes)
+        except (OSError,ValueError) as error:
+            self.get_logger().warn(f'Optional snapshot skipped: {str(error)[:256]}',throttle_duration_sec=10.)
+
+    def close(self):
+        self.position.close()
+        if self.discovery is not None:self.discovery.close()
+
 
 def main(args=None):
     rclpy.init(args=args)
@@ -254,22 +156,9 @@ def main(args=None):
         pass
     finally:
         if node is not None:
-            node.position.close()
-            if node._api_worker is not None:
-                # Best-effort worker stop: clear any queued snapshot and
-                # deliver the shutdown sentinel (worker is a daemon, so a
-                # full queue at exit is not fatal).
-                try:
-                    node._api_queue.get_nowait()
-                except queue.Empty:
-                    pass
-                try:
-                    node._api_queue.put_nowait(None)
-                except queue.Full:
-                    pass
+            node.close()
             node.destroy_node()
         rclpy.shutdown()
 
 
-if __name__ == '__main__':
-    main()
+if __name__=='__main__':main()
