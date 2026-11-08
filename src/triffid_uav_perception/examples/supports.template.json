@@ -1,0 +1,1032 @@
+{
+  "schema_version": "triffid.uav.support-bank.v1",
+  "examples_per_class": 5,
+  "classes": {
+    "water": [
+      {
+        "id": "example_01",
+        "image": "water/01/image.png",
+        "mask": "water/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "water/02/image.png",
+        "mask": "water/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "water/03/image.png",
+        "mask": "water/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "water/04/image.png",
+        "mask": "water/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "water/05/image.png",
+        "mask": "water/05/mask.png"
+      }
+    ],
+    "green tree": [
+      {
+        "id": "example_01",
+        "image": "green_tree/01/image.png",
+        "mask": "green_tree/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "green_tree/02/image.png",
+        "mask": "green_tree/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "green_tree/03/image.png",
+        "mask": "green_tree/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "green_tree/04/image.png",
+        "mask": "green_tree/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "green_tree/05/image.png",
+        "mask": "green_tree/05/mask.png"
+      }
+    ],
+    "flame": [
+      {
+        "id": "example_01",
+        "image": "flame/01/image.png",
+        "mask": "flame/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "flame/02/image.png",
+        "mask": "flame/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "flame/03/image.png",
+        "mask": "flame/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "flame/04/image.png",
+        "mask": "flame/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "flame/05/image.png",
+        "mask": "flame/05/mask.png"
+      }
+    ],
+    "smoke": [
+      {
+        "id": "example_01",
+        "image": "smoke/01/image.png",
+        "mask": "smoke/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "smoke/02/image.png",
+        "mask": "smoke/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "smoke/03/image.png",
+        "mask": "smoke/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "smoke/04/image.png",
+        "mask": "smoke/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "smoke/05/image.png",
+        "mask": "smoke/05/mask.png"
+      }
+    ],
+    "first responder": [
+      {
+        "id": "example_01",
+        "image": "first_responder/01/image.png",
+        "mask": "first_responder/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "first_responder/02/image.png",
+        "mask": "first_responder/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "first_responder/03/image.png",
+        "mask": "first_responder/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "first_responder/04/image.png",
+        "mask": "first_responder/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "first_responder/05/image.png",
+        "mask": "first_responder/05/mask.png"
+      }
+    ],
+    "destroyed vehicle": [
+      {
+        "id": "example_01",
+        "image": "destroyed_vehicle/01/image.png",
+        "mask": "destroyed_vehicle/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "destroyed_vehicle/02/image.png",
+        "mask": "destroyed_vehicle/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "destroyed_vehicle/03/image.png",
+        "mask": "destroyed_vehicle/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "destroyed_vehicle/04/image.png",
+        "mask": "destroyed_vehicle/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "destroyed_vehicle/05/image.png",
+        "mask": "destroyed_vehicle/05/mask.png"
+      }
+    ],
+    "green plant": [
+      {
+        "id": "example_01",
+        "image": "green_plant/01/image.png",
+        "mask": "green_plant/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "green_plant/02/image.png",
+        "mask": "green_plant/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "green_plant/03/image.png",
+        "mask": "green_plant/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "green_plant/04/image.png",
+        "mask": "green_plant/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "green_plant/05/image.png",
+        "mask": "green_plant/05/mask.png"
+      }
+    ],
+    "window": [
+      {
+        "id": "example_01",
+        "image": "window/01/image.png",
+        "mask": "window/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "window/02/image.png",
+        "mask": "window/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "window/03/image.png",
+        "mask": "window/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "window/04/image.png",
+        "mask": "window/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "window/05/image.png",
+        "mask": "window/05/mask.png"
+      }
+    ],
+    "building": [
+      {
+        "id": "example_01",
+        "image": "building/01/image.png",
+        "mask": "building/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "building/02/image.png",
+        "mask": "building/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "building/03/image.png",
+        "mask": "building/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "building/04/image.png",
+        "mask": "building/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "building/05/image.png",
+        "mask": "building/05/mask.png"
+      }
+    ],
+    "destroyed building": [
+      {
+        "id": "example_01",
+        "image": "destroyed_building/01/image.png",
+        "mask": "destroyed_building/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "destroyed_building/02/image.png",
+        "mask": "destroyed_building/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "destroyed_building/03/image.png",
+        "mask": "destroyed_building/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "destroyed_building/04/image.png",
+        "mask": "destroyed_building/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "destroyed_building/05/image.png",
+        "mask": "destroyed_building/05/mask.png"
+      }
+    ],
+    "debris": [
+      {
+        "id": "example_01",
+        "image": "debris/01/image.png",
+        "mask": "debris/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "debris/02/image.png",
+        "mask": "debris/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "debris/03/image.png",
+        "mask": "debris/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "debris/04/image.png",
+        "mask": "debris/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "debris/05/image.png",
+        "mask": "debris/05/mask.png"
+      }
+    ],
+    "dirt road": [
+      {
+        "id": "example_01",
+        "image": "dirt_road/01/image.png",
+        "mask": "dirt_road/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "dirt_road/02/image.png",
+        "mask": "dirt_road/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "dirt_road/03/image.png",
+        "mask": "dirt_road/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "dirt_road/04/image.png",
+        "mask": "dirt_road/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "dirt_road/05/image.png",
+        "mask": "dirt_road/05/mask.png"
+      }
+    ],
+    "dry tree": [
+      {
+        "id": "example_01",
+        "image": "dry_tree/01/image.png",
+        "mask": "dry_tree/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "dry_tree/02/image.png",
+        "mask": "dry_tree/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "dry_tree/03/image.png",
+        "mask": "dry_tree/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "dry_tree/04/image.png",
+        "mask": "dry_tree/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "dry_tree/05/image.png",
+        "mask": "dry_tree/05/mask.png"
+      }
+    ],
+    "civilian vehicle": [
+      {
+        "id": "example_01",
+        "image": "civilian_vehicle/01/image.png",
+        "mask": "civilian_vehicle/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "civilian_vehicle/02/image.png",
+        "mask": "civilian_vehicle/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "civilian_vehicle/03/image.png",
+        "mask": "civilian_vehicle/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "civilian_vehicle/04/image.png",
+        "mask": "civilian_vehicle/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "civilian_vehicle/05/image.png",
+        "mask": "civilian_vehicle/05/mask.png"
+      }
+    ],
+    "road": [
+      {
+        "id": "example_01",
+        "image": "road/01/image.png",
+        "mask": "road/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "road/02/image.png",
+        "mask": "road/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "road/03/image.png",
+        "mask": "road/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "road/04/image.png",
+        "mask": "road/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "road/05/image.png",
+        "mask": "road/05/mask.png"
+      }
+    ],
+    "citizen": [
+      {
+        "id": "example_01",
+        "image": "citizen/01/image.png",
+        "mask": "citizen/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "citizen/02/image.png",
+        "mask": "citizen/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "citizen/03/image.png",
+        "mask": "citizen/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "citizen/04/image.png",
+        "mask": "citizen/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "citizen/05/image.png",
+        "mask": "citizen/05/mask.png"
+      }
+    ],
+    "green grass": [
+      {
+        "id": "example_01",
+        "image": "green_grass/01/image.png",
+        "mask": "green_grass/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "green_grass/02/image.png",
+        "mask": "green_grass/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "green_grass/03/image.png",
+        "mask": "green_grass/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "green_grass/04/image.png",
+        "mask": "green_grass/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "green_grass/05/image.png",
+        "mask": "green_grass/05/mask.png"
+      }
+    ],
+    "boat": [
+      {
+        "id": "example_01",
+        "image": "boat/01/image.png",
+        "mask": "boat/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "boat/02/image.png",
+        "mask": "boat/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "boat/03/image.png",
+        "mask": "boat/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "boat/04/image.png",
+        "mask": "boat/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "boat/05/image.png",
+        "mask": "boat/05/mask.png"
+      }
+    ],
+    "pavement": [
+      {
+        "id": "example_01",
+        "image": "pavement/01/image.png",
+        "mask": "pavement/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "pavement/02/image.png",
+        "mask": "pavement/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "pavement/03/image.png",
+        "mask": "pavement/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "pavement/04/image.png",
+        "mask": "pavement/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "pavement/05/image.png",
+        "mask": "pavement/05/mask.png"
+      }
+    ],
+    "dry grass": [
+      {
+        "id": "example_01",
+        "image": "dry_grass/01/image.png",
+        "mask": "dry_grass/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "dry_grass/02/image.png",
+        "mask": "dry_grass/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "dry_grass/03/image.png",
+        "mask": "dry_grass/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "dry_grass/04/image.png",
+        "mask": "dry_grass/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "dry_grass/05/image.png",
+        "mask": "dry_grass/05/mask.png"
+      }
+    ],
+    "excavator": [
+      {
+        "id": "example_01",
+        "image": "excavator/01/image.png",
+        "mask": "excavator/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "excavator/02/image.png",
+        "mask": "excavator/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "excavator/03/image.png",
+        "mask": "excavator/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "excavator/04/image.png",
+        "mask": "excavator/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "excavator/05/image.png",
+        "mask": "excavator/05/mask.png"
+      }
+    ],
+    "door": [
+      {
+        "id": "example_01",
+        "image": "door/01/image.png",
+        "mask": "door/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "door/02/image.png",
+        "mask": "door/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "door/03/image.png",
+        "mask": "door/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "door/04/image.png",
+        "mask": "door/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "door/05/image.png",
+        "mask": "door/05/mask.png"
+      }
+    ],
+    "mud": [
+      {
+        "id": "example_01",
+        "image": "mud/01/image.png",
+        "mask": "mud/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "mud/02/image.png",
+        "mask": "mud/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "mud/03/image.png",
+        "mask": "mud/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "mud/04/image.png",
+        "mask": "mud/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "mud/05/image.png",
+        "mask": "mud/05/mask.png"
+      }
+    ],
+    "burnt tree": [
+      {
+        "id": "example_01",
+        "image": "burnt_tree/01/image.png",
+        "mask": "burnt_tree/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "burnt_tree/02/image.png",
+        "mask": "burnt_tree/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "burnt_tree/03/image.png",
+        "mask": "burnt_tree/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "burnt_tree/04/image.png",
+        "mask": "burnt_tree/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "burnt_tree/05/image.png",
+        "mask": "burnt_tree/05/mask.png"
+      }
+    ],
+    "ambulance": [
+      {
+        "id": "example_01",
+        "image": "ambulance/01/image.png",
+        "mask": "ambulance/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "ambulance/02/image.png",
+        "mask": "ambulance/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "ambulance/03/image.png",
+        "mask": "ambulance/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "ambulance/04/image.png",
+        "mask": "ambulance/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "ambulance/05/image.png",
+        "mask": "ambulance/05/mask.png"
+      }
+    ],
+    "fire truck": [
+      {
+        "id": "example_01",
+        "image": "fire_truck/01/image.png",
+        "mask": "fire_truck/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "fire_truck/02/image.png",
+        "mask": "fire_truck/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "fire_truck/03/image.png",
+        "mask": "fire_truck/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "fire_truck/04/image.png",
+        "mask": "fire_truck/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "fire_truck/05/image.png",
+        "mask": "fire_truck/05/mask.png"
+      }
+    ],
+    "tower": [
+      {
+        "id": "example_01",
+        "image": "tower/01/image.png",
+        "mask": "tower/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "tower/02/image.png",
+        "mask": "tower/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "tower/03/image.png",
+        "mask": "tower/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "tower/04/image.png",
+        "mask": "tower/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "tower/05/image.png",
+        "mask": "tower/05/mask.png"
+      }
+    ],
+    "silo": [
+      {
+        "id": "example_01",
+        "image": "silo/01/image.png",
+        "mask": "silo/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "silo/02/image.png",
+        "mask": "silo/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "silo/03/image.png",
+        "mask": "silo/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "silo/04/image.png",
+        "mask": "silo/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "silo/05/image.png",
+        "mask": "silo/05/mask.png"
+      }
+    ],
+    "military personnel": [
+      {
+        "id": "example_01",
+        "image": "military_personnel/01/image.png",
+        "mask": "military_personnel/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "military_personnel/02/image.png",
+        "mask": "military_personnel/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "military_personnel/03/image.png",
+        "mask": "military_personnel/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "military_personnel/04/image.png",
+        "mask": "military_personnel/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "military_personnel/05/image.png",
+        "mask": "military_personnel/05/mask.png"
+      }
+    ],
+    "burnt grass": [
+      {
+        "id": "example_01",
+        "image": "burnt_grass/01/image.png",
+        "mask": "burnt_grass/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "burnt_grass/02/image.png",
+        "mask": "burnt_grass/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "burnt_grass/03/image.png",
+        "mask": "burnt_grass/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "burnt_grass/04/image.png",
+        "mask": "burnt_grass/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "burnt_grass/05/image.png",
+        "mask": "burnt_grass/05/mask.png"
+      }
+    ],
+    "crane": [
+      {
+        "id": "example_01",
+        "image": "crane/01/image.png",
+        "mask": "crane/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "crane/02/image.png",
+        "mask": "crane/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "crane/03/image.png",
+        "mask": "crane/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "crane/04/image.png",
+        "mask": "crane/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "crane/05/image.png",
+        "mask": "crane/05/mask.png"
+      }
+    ],
+    "stairs": [
+      {
+        "id": "example_01",
+        "image": "stairs/01/image.png",
+        "mask": "stairs/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "stairs/02/image.png",
+        "mask": "stairs/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "stairs/03/image.png",
+        "mask": "stairs/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "stairs/04/image.png",
+        "mask": "stairs/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "stairs/05/image.png",
+        "mask": "stairs/05/mask.png"
+      }
+    ],
+    "dry plant": [
+      {
+        "id": "example_01",
+        "image": "dry_plant/01/image.png",
+        "mask": "dry_plant/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "dry_plant/02/image.png",
+        "mask": "dry_plant/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "dry_plant/03/image.png",
+        "mask": "dry_plant/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "dry_plant/04/image.png",
+        "mask": "dry_plant/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "dry_plant/05/image.png",
+        "mask": "dry_plant/05/mask.png"
+      }
+    ],
+    "tank": [
+      {
+        "id": "example_01",
+        "image": "tank/01/image.png",
+        "mask": "tank/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "tank/02/image.png",
+        "mask": "tank/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "tank/03/image.png",
+        "mask": "tank/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "tank/04/image.png",
+        "mask": "tank/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "tank/05/image.png",
+        "mask": "tank/05/mask.png"
+      }
+    ],
+    "police vehicle": [
+      {
+        "id": "example_01",
+        "image": "police_vehicle/01/image.png",
+        "mask": "police_vehicle/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "police_vehicle/02/image.png",
+        "mask": "police_vehicle/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "police_vehicle/03/image.png",
+        "mask": "police_vehicle/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "police_vehicle/04/image.png",
+        "mask": "police_vehicle/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "police_vehicle/05/image.png",
+        "mask": "police_vehicle/05/mask.png"
+      }
+    ],
+    "burnt plant": [
+      {
+        "id": "example_01",
+        "image": "burnt_plant/01/image.png",
+        "mask": "burnt_plant/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "burnt_plant/02/image.png",
+        "mask": "burnt_plant/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "burnt_plant/03/image.png",
+        "mask": "burnt_plant/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "burnt_plant/04/image.png",
+        "mask": "burnt_plant/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "burnt_plant/05/image.png",
+        "mask": "burnt_plant/05/mask.png"
+      }
+    ],
+    "army vehicle": [
+      {
+        "id": "example_01",
+        "image": "army_vehicle/01/image.png",
+        "mask": "army_vehicle/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "army_vehicle/02/image.png",
+        "mask": "army_vehicle/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "army_vehicle/03/image.png",
+        "mask": "army_vehicle/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "army_vehicle/04/image.png",
+        "mask": "army_vehicle/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "army_vehicle/05/image.png",
+        "mask": "army_vehicle/05/mask.png"
+      }
+    ],
+    "furniture": [
+      {
+        "id": "example_01",
+        "image": "furniture/01/image.png",
+        "mask": "furniture/01/mask.png"
+      },
+      {
+        "id": "example_02",
+        "image": "furniture/02/image.png",
+        "mask": "furniture/02/mask.png"
+      },
+      {
+        "id": "example_03",
+        "image": "furniture/03/image.png",
+        "mask": "furniture/03/mask.png"
+      },
+      {
+        "id": "example_04",
+        "image": "furniture/04/image.png",
+        "mask": "furniture/04/mask.png"
+      },
+      {
+        "id": "example_05",
+        "image": "furniture/05/image.png",
+        "mask": "furniture/05/mask.png"
+      }
+    ]
+  }
+}

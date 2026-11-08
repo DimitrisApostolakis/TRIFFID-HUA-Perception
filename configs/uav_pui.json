@@ -1,0 +1,29 @@
+{
+  "site": "PUI",
+  "platform": "uav",
+  "code_checkout": "/mnt/d/projects/triffid-hua-perception",
+  "code_branch": "uav-local-run",
+  "code_commit": "285c68dc05865ba55ebfcbe25d55dd0957304786",
+  "support_bank": "/mnt/d/projects/triffid-hua-perception/uav_supports/PUI",
+  "support_schema": "triffid.uav.support-bank.v1",
+  "examples_per_class": 5,
+  "initial_shots": 1,
+  "tracking_changes_enabled": false,
+  "api_enabled": false,
+  "base_uav_checkout": "/mnt/d/Projects/TRIFFID-HUA-Perception-UAV",
+  "local_changes": [
+    "Separate first responder, citizen and military personnel using original IDs"
+  ],
+  "human_role_policy": "separate labels",
+  "latest_support_export": "D:/Datasets/PUI/PUI-Dataset/UAV-PUI.zip",
+  "support_export_sha256": "59c69489df71d7390dbd87eafd2fd5e7b0f2e28dd3b39bb8beeb41d519673022",
+  "ontology_classes": 38,
+  "point_classes": 18,
+  "polygon_classes": 20,
+  "evaluation_holdout_task_ids": [
+    1,
+    3
+  ],
+  "evaluation_split": "data/UAV-PUI/holdout_1_3/split.json",
+  "latest_evaluation": "samples/UAV-PUI/holdout_1_3_1shot/comparison.json"
+}

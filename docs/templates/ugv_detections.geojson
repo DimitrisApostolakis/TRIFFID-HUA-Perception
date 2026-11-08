@@ -1,0 +1,55 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "id": "object-001",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [1.38174, 46.02709]
+      },
+      "properties": {
+        "class": "citizen",
+        "id": "object-001",
+        "confidence": 0.87,
+        "category": "person",
+        "detection_type": "seg",
+        "source": "ugv",
+        "local_frame": false,
+        "altitude_m": 590.5,
+        "height_m": 1.7,
+        "marker-color": "#4169e1",
+        "marker-size": "medium",
+        "marker-symbol": "pitch"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "object-002",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [1.38172, 46.02710],
+          [1.38176, 46.02712]
+        ]
+      },
+      "properties": {
+        "class": "fence",
+        "id": "object-002",
+        "confidence": 0.82,
+        "category": "obstacle",
+        "detection_type": "seg",
+        "source": "ugv",
+        "local_frame": false,
+        "altitude_m": 590.5,
+        "height_m": 1.2,
+        "marker-color": "#daa520",
+        "marker-size": "medium",
+        "marker-symbol": "marker",
+        "stroke": "#daa520",
+        "stroke-width": 2,
+        "stroke-opacity": 1.0
+      }
+    }
+  ]
+}

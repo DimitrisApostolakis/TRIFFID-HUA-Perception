@@ -1,0 +1,42 @@
+{
+  "schema": "triffid.ugv.live-profile.v1",
+  "node": {
+    "backend": "yoloe",
+    "tracker": "masa",
+    "person_roles": true,
+    "async_inference": false,
+    "inference_period_s": 0.9,
+    "max_pending_age_s": 1.0,
+    "image_size": 640,
+    "classes": "",
+    "support_bank": "/ws/ugv_supports/PUI",
+    "confidence_threshold": 0.35,
+    "tracking_confidence_floor": 0.1,
+    "yoloe_nms_iou": 0.5,
+    "yoloe_expected_checkpoint_sha256": "14e9c146f7f7efa0bfea8c5f82952c9f95fb1f9c3bf0f18b3727b76624f9d746",
+    "yoloe_expected_source_revision": "40cd606cabdbe2b566d6f14a6b162c89206e9a1b",
+    "support_bank_expected_sha256": "97768b562b10aea2b5fbed280a00af86bc13783a028419efb6f76202095a473d",
+    "support_selection_expected_sha256": "82a08312716692b5c8e795ae557f2c7ae71dc02a353da25eed8d8bcaec3d1803",
+    "masa_expected_checkpoint_sha256": "082670efc6e8820eff8257f78ea14dfb52d6cdbe2910ecccf0901a74f4a0fd76",
+    "masa_expected_source_revision": "c5472b9c7615f35abdf1188cb1a0c5408fe50d66",
+    "masa_expected_tracker_source_sha256": "b1f330a62289f32b00b28190acfa7920d8904feb061906af117b140c9d7ef8c3"
+  },
+  "bridge": {
+    "discovery_updates_enabled": true,
+    "discovery_update_interval_s": 2.0,
+    "discovery_update_distance_m": 1.0,
+    "discovery_update_altitude_m": 1.0,
+    "discovery_update_confidence_delta": 0.1,
+    "discovery_flush_interval_s": 1.0,
+    "use_rich_observations": true,
+    "discovery_embedding_space": "auto",
+    "discovery_namespace": "PUI/live/front/yoloe-masa",
+    "discovery_db_path": "/ws/state/PUI/live_yoloe_masa/discoveries.sqlite3",
+    "output_dir": "/ws/state/PUI/live_yoloe_masa/snapshots",
+    "publish_to_api": false
+  },
+  "runtime": {
+    "inference_python": "/ws/ugv_models/opus_env/bin/python",
+    "inference_pythonpath": "/ws/src/triffid_ugv_perception:/ws/ugv_models/opus/third_party/mmdetection:/ws/ugv_models/opus"
+  }
+}

@@ -1,0 +1,114 @@
+{
+  "site": "PUI",
+  "support_bank": "ugv_supports/PUI",
+  "support_manifest": "ugv_supports/PUI/model_inputs/manifest.json",
+  "support_policy": "all_available_up_to_16_distinct_images_per_class",
+  "default_dataset": "data/PUI/rgb_frames",
+  "datasets": {
+    "original": "data/PUI/rgb_frames",
+    "scenario_1": "data/PUI/scenarios/scenario_1/rgb_frames",
+    "scenario_2_pair": "data/PUI/scenario2_pair_rgb_frames"
+  },
+  "frame_sampling_hz": 1,
+  "tracker": "MASA-R50",
+  "api_enabled": false,
+  "output_policy": {
+    "directory": "samples/{MODEL}/{DATASET}/{RUN}/",
+    "artifacts": [
+      "detections.mp4",
+      "tracking.mp4",
+      "exports.mp4",
+      "overlays/{detections,tracking,exports}/*.jpg",
+      "timings.csv",
+      "audit.json",
+      "observations.jsonl",
+      "detections.geojson"
+    ],
+    "audit": [
+      "model_revision",
+      "checkpoint_sha256",
+      "bank_sha256",
+      "class_support_counts",
+      "thresholds",
+      "input_resolution",
+      "frames",
+      "detections",
+      "track_counts",
+      "timing_summary",
+      "support_query_overlap",
+      "ground_truth_available",
+      "accuracy_evaluated",
+      "limitations"
+    ],
+    "timing_columns": [
+      "frame",
+      "timestamp_ns",
+      "detector_s",
+      "tracker_s",
+      "total_s",
+      "detections",
+      "tracks",
+      "new_objects"
+    ],
+    "timing_note": "Record initialization separately and cold/warm inference separately. Do not present model-only sums as measured end-to-end latency.",
+    "html": false,
+    "save_raw_tensors": false,
+    "shared_data": "data/PUI",
+    "support_feature_caches": "ugv_models/{MODEL}_support_cache/PUI",
+    "export_video": "Newly confirmed GeoJSON UUIDs once at first discovery; geometry may be null; independent of the API upload queue"
+  },
+  "models": {
+    "FSOD-VFM": {
+      "repo": "ugv_models/fsod_vfm",
+      "python": "ugv_models/fsod_vfm_env/bin/python",
+      "support_json": "ugv_supports/PUI/model_inputs/fsod_vfm_supports.json",
+      "feature_extractor": "DINOv2 ViT-L/14",
+      "checkpoint": "ugv_models/fsod_vfm/checkpoints/dinov2_vitl14_pretrain.pth",
+      "proposal_checkpoint": "ugv_models/weights/FSOD-VFM/upn_large.pth",
+      "mask_checkpoint": "ugv_models/weights/FSOD-VFM/sam2.1_hiera_large.pt",
+      "proposal_min_score": 0.01,
+      "diffusion_steps": 30,
+      "alpha": 0.3,
+      "lambda": 0.5,
+      "prompt_mode": "visual"
+    },
+    "DINOv": {
+      "repo": "ugv_models/dinov",
+      "python": "ugv_models/dinov_env/bin/python",
+      "default_variant": "Swin-T",
+      "variants": {
+        "Swin-T": {
+          "config": "ugv_models/dinov/configs/dinov_sam_coco_train.yaml",
+          "checkpoint": "ugv_models/weights/DINOv/model_swinT.pth"
+        },
+        "Swin-L": {
+          "config": "ugv_models/dinov/configs/dinov_sam_coco_swinl_train.yaml",
+          "checkpoint": "ugv_models/weights/DINOv/model_swinL.pth"
+        }
+      },
+      "max_examples_per_class": 16,
+      "prompt_mode": "visual_masks",
+      "note": "DINOv visual in-context detection/segmentation; distinct from the DINOv2 feature backbone. Prompt feature computation is deferred until inference is authorized."
+    },
+    "YOLOE": {
+      "repo": "ugv_models/yoloe",
+      "python": "ugv_models/yoloe_env/bin/python",
+      "default_variant": "v8-L",
+      "variants": {
+        "v8-S": "ugv_models/weights/YOLOE/yoloe-v8s-seg.pt",
+        "v8-L": "ugv_models/weights/YOLOE/yoloe-v8l-seg.pt"
+      },
+      "prompt_mode": "visual_boxes",
+      "class_ids": "manifest classes[index], contiguous zero-based",
+      "support_boxes": "tight boxes derived from annotated foreground masks",
+      "text_prompting": false,
+      "image_size": 640
+    }
+  },
+  "latest_support_export": "UGV-PUI.zip",
+  "support_counts": {
+    "classes": 29,
+    "examples": 200
+  },
+  "latest_run": "ugv_pui_20261106"
+}

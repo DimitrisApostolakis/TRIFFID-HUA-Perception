@@ -8,6 +8,8 @@ uav_data/
 
 # Runtime output directories (GeoJSON snapshots / detection runs)
 samples/
+data/
+archive/
 uav_samples/
 detection_frames/*.png
 thermal_frames/*.png
@@ -31,3 +33,45 @@ __pycache__/
 
 # Secrets / credentials
 *.env
+.env.*
+!.env.example
+!.env.template
+secrets/
+credentials/
+*.pem
+*.key
+
+# UGV models and independent visual support bank
+ugv_models/
+uav_models/
+ugv_supports/
+uav_supports/
+.pytest_cache/
+
+# Durable local mission state and bounded debug outputs
+state/
+
+# External weights and generated exports (existing tracked files are unaffected)
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.engine
+*.avi
+*.webm
+*.mov
+*.MOV
+*.mkv
+*.bag
+*.mcap
+*.db3
+*.sqlite
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*.zip
+*.7z
+*.tar
+*.tar.gz

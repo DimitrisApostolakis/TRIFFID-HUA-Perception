@@ -18,9 +18,11 @@ services:
       - ./src:/ws/src                          # source code (editable from host)
       - ./install:/ws/install                  # persist build artifacts
       - ./build:/ws/build                      # persist build artifacts
+      - ./state:/ws/state                      # durable bounded discovery registry/outbox
       - ./log:/ws/log                          # persist logs
       - ./cyclonedds.xml:/ws/cyclonedds.xml:ro # DDS config
-      - ./best.pt:/ws/best.pt:ro               # model weights
+      - ./ugv_models:/ws/models:ro             # official SANSA checkout + checkpoints
+      - ./ugv_supports:/ws/ugv_supports:ro     # UGV-only support bank
       - ./samples:/ws/samples                  # periodic GeoJSON snapshots
       - ./detection_frames:/ws/detection_frames # RGB frames with detection overlays
       - ./thermal_frames:/ws/thermal_frames     # optional FLIR debug snapshots

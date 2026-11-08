@@ -1,0 +1,7 @@
+# Install the matching torch/torchvision build first (see Dockerfile).
+-r requirements.txt
+Pillow>=10
+hydra-core==1.3.2
+einops>=0.7
+tqdm>=4.65
+py3_wget

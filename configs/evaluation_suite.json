@@ -1,0 +1,36 @@
+{
+  "schema": "triffid.evaluation-suite.v1",
+  "seed": 0,
+  "production_target": {"gpu": "current NVIDIA RTX 3060", "minimum_processed_frames_per_second": 1, "scope": "measured complete live pipeline after warmup"},
+  "uav": {
+    "models": ["foris", "insid3", "frost", "rsrm", "fssdino", "fss-sam3-text"],
+    "deferred": ["Matcher", "GF-SAM", "PerSAM", "No Time to Train", "SegIC", "SINE", "SANSA"],
+    "split": "data/UAV-PUI/holdout_1_3/split.json",
+    "tasks": [1, 3],
+    "shots": 1,
+    "class_episodes": 6,
+    "backbone": "DINOv3 ViT-L/16 LVD-1689M",
+    "variant_note": "User authorized the available ViT-L checkpoint for RSRM and FSSDINO, replacing their released ViT-B configuration",
+    "python": "/home/oracle/miniforge3/envs/frost/bin/python",
+    "python_by_backend": {"fss-sam3-text": "/home/oracle/miniforge3/envs/fss-sam3/bin/python"},
+    "primary_metric": "pooled per-class IoU inside union of saved brush masks, averaged across six classes",
+    "secondary_metric": "full-frame IoU with explicit unlabeled-background assumption; window/furniture component-box F1 at IoU 0.5"
+  },
+  "ugv": {
+    "models": ["PET-DINO", "OPUS", "FSOD-VFM", "DINOv", "YOLOE", "YOLOE-26-M", "YOLOE-26-L", "DE-ViT", "SINE", "COSINE", "SANSA"],
+    "split": "data/ROSBAG-PUI/evaluation_v2/split.json",
+    "tasks": [49, 50],
+    "support_policy": "native previously tested policy: all available for PET/OPUS/comparison adapters, one shot for DE-ViT/SINE/COSINE/SANSA",
+    "primary_metrics": ["COCO bbox AP at native fixed acceptance thresholds", "class-aware bbox F1 at IoU 0.5", "native mask union IoU inside saved brush region when masks are available"],
+    "unsupported_query_classes": ["helmet"],
+    "tracking_metrics": null,
+    "tracking_note": "Two independent saved images have no validated temporal identities; HOTA/IDF1/re-ID accuracy cannot be computed"
+  },
+  "execution": {
+    "sequential_gpu_jobs": true,
+    "fresh_output_required": true,
+    "api_enabled": false,
+    "output": "samples/evaluation/{platform}/{run}/{model}/",
+    "outputs": ["metrics.json", "overlays or annotated JPGs", "logs", "status.json", "environment freeze"]
+  }
+}

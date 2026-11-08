@@ -1,0 +1,10 @@
+# Current-workstation live profile. The pinned prepared inference runtime is
+# mounted read-only separately from the ROS Python runtime and mission state.
+services:
+  perception:
+    container_name: triffid_ugv_live
+    volumes:
+      - ./ugv_models:/ws/ugv_models:ro
+      - /home/oracle/miniforge3:/home/oracle/miniforge3:ro
+    entrypoint: ["/bin/bash", "-c"]
+    command: ["source /opt/ros/jazzy/setup.bash && cd /ws && colcon --log-base /ws/state/ugv_live_build/log build --base-paths /ws/src/triffid_ugv_perception --build-base /ws/state/ugv_live_build/build --install-base /ws/state/ugv_live_build/install --symlink-install --packages-select triffid_ugv_perception && source /ws/state/ugv_live_build/install/setup.bash && exec ros2 launch triffid_ugv_perception ugv_live.launch.py"]

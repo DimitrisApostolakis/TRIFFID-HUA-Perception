@@ -1,0 +1,18 @@
+# Dedicated runtime; install the upstream pinned OpenMMLab submodules separately.
+# See docs/OPUS_BASELINE.md. Do not install into the legacy PET-DINO environment.
+torch==2.7.0
+torchvision==0.22.0
+transformers==5.5.0
+huggingface_hub==1.24.0
+numpy==1.26.4
+scipy==1.14.1
+opencv-python==4.11.0.86
+tifffile==2024.9.20
+cython
+fairscale
+shapely
+pycocotools
+terminaltables
+ftfy
+einops
+ninja

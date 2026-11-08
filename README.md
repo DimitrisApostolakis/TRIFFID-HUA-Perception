@@ -4,182 +4,91 @@
 
 **Contact: amichailidou@hua.gr**
 
-## General Information
-
-Two independent modules, each in its own Docker container, both running on
-live data:
+## Current modules
 
 | Module | Input | Output |
 |---|---|---|
-| **UGV** (`triffid_ugv_perception`) | Live RGB-D camera topics + GPS/odometry | `Detection3DArray` + GeoJSON on ROS topics, periodic GeoJSON snapshot to disk and/or upsert to the TELESTO backend |
-| **UAV** (`triffid_uav_perception`) | Drone video (MP4 + DJI SRT telemetry sidecar), polled live from API | One pixel-space GeoJSON per video, saved to disk, optional upload to the TELESTO backend |
+| UGV | Live RGB-D, CameraInfo/TF and robot GPS/heading | ROS detections, masks, debug images, persistent identities and geographic GeoJSON; optional durable PUT/PATCH delivery |
+| UAV | Recorded drone video with DJI SRT, selected frames, or a supplied image | Versioned pixel-space masks/point observations; optional offline MASA association; geographic projection in a separate Unity project |
 
-Full topic/message/GeoJSON spec: [INTERFACE.md](INTERFACE.md).
+Automatic API publishing is disabled by default. The UAV CLI is a recorded-media
+pipeline; continuous UAV live inference is not yet integrated.
 
-## 1. UGV Module
+## UGV
 
-Real-time 3D detection: YOLOv11-seg on RGB, depth sampled at detection
-pixels (pixel-aligned RGB-D), back-projection to 3D, TF to `b2/base_link`,
-ByteTrack IDs, GeoJSON geo-referencing via GPS + heading (will be changed to be via tf2 tree once available).
+The selected live profile uses **YOLOE-v8-L + MASA-R50**, an independent visual
+support bank, calibrated RGB-D localization and persistent re-ID evidence. The
+legacy launch retains SANSA defaults. Fence/wall export as LineStrings; other
+UGV classes export as Points.
 
-### Build and start the container
-
-```bash
-docker compose up -d
-docker exec -it triffid_perception bash
-# inside the container:
-cd /ws && source /opt/ros/humble/setup.bash && colcon build --symlink-install
-source /ws/install/setup.bash
-```
-
-Requires the NVIDIA container toolkit (GPU). The container uses
-`network_mode: host`, so it sees your ROS 2 traffic directly
-(`ROS_DOMAIN_ID=42`, CycloneDDS , see `cyclonedds.xml`).
-
-### Run the perception node
-
-Inside the container (one terminal per node, or append `&`):
+On the prepared RTX 3060 workstation:
 
 ```bash
-ros2 run triffid_ugv_perception ugv_node --ros-args \
-    -p model_path:=/ws/best.pt \
-    -p rgb_image_topic:=/camera_front_435i/realsense_front_435i/color/image_raw \
-    -p depth_image_topic:=/camera_front_435i/realsense_front_435i/depth/image_rect_raw \
-    -p camera_info_topic:=/camera_front_435i/realsense_front_435i/color/camera_info
+docker compose -p triffid-ugv-live \
+  -f docker-compose.yml -f docker-compose.ugv-live.yml up -d perception
 ```
 
-Set the three topic parameters to wherever the camera publishes. The
-camera must be pixel-aligned RGB-D: `bgr8` (or YUYV) colour, `16UC1` depth
-in millimetres, one shared `CameraInfo`. A TF from the camera optical
-frame (read from `CameraInfo.header.frame_id`) to `b2/base_link` must be
-available.
+The profile mounts an externally prepared model runtime and weights. Follow the
+setup guide before using it on a new machine.
 
-Other `ugv_node` parameters (defaults): `confidence_threshold` (0.35),
-`yolo_imgsz` (1280), `target_frame` (`b2/base_link`), `nms_merge_dist_m`
-(0.5), and tracker tuning , `tracker_iou_threshold` (0.30),
-`tracker_iou_threshold_low` (0.15), `tracker_conf_high` (0.40),
-`tracker_max_age` (30), `tracker_n_init` (3), `tracker_pos_gate` (2.0).
+- [Architecture and code structure](docs/UGV_ARCHITECTURE.md)
+- [Live deployment and verification](docs/UGV_LIVE_YOLOE_MASA.md)
+- [Persistent PUT/PATCH delivery](docs/UGV_API_DELIVERY.md)
+- [Module setup and parameters](src/triffid_ugv_perception/README.md)
 
-### Run the GeoJSON bridge
+## UAV
+
+Python selects views, runs support-conditioned segmentation, extracts connected
+components and exports masks at original image resolution. Optional MASA
+tracking retains one representative observation per confirmed identity. Unity
+uses capture telemetry, camera calibration and the scene mesh to produce
+geographic GeoJSON.
 
 ```bash
-ros2 run triffid_ugv_perception geojson_bridge --ros-args \
-    -p save_to_disk:=true \
-    -p publish_to_api:=false \
-    -p publish_period_s:=5.0 \
-    -p output_dir:=/ws/samples
+PYTHONPATH=src/triffid_uav_perception \
+  python -m triffid_uav_perception.uav_node --help
 ```
 
-| Parameter | Default | Meaning |
-|---|---|---|
-| `save_to_disk` | `true` | Every period, write the accumulated deduplicated feature set atomically to `output_dir/ugv_detections.geojson` (host: `./samples/`) |
-| `publish_to_api` | `false` | Every period, **upsert** the accumulated set to `api_url` (GET remote → PUT new / PATCH improved / skip unchanged |
-| `publish_period_s` | `5.0` | Seconds between periodic flushes |
-| `output_dir` | `/ws/samples` | Snapshot directory inside the container |
-| `api_url` | `https://crispres.com/wp-json/map-manager/v1/features` | TELESTO Map Manager API endpoint |
-| `dedup_radius_m` | `3.0` | Same-class features within this distance merge (highest confidence kept) |
-| `gps_origin_lat/lon/alt` | `0.0` | Optional GPS seed used until the first `/fix` arrives |
+The main CLI currently selects SANSA. FoRIS, INSID3, FROST, RSRM, FSSDINO and
+FSS-SAM3 adapters are exercised through dedicated runners. RSRM/FSSDINO tests
+use the available DINOv3-L replacement. UAV identity persistence is scoped to one
+tracking run; it does not yet share the UGV durable API publisher.
 
-Both flags are independent, enable either or both. The bridge also
-publishes the per-frame GeoJSON on the ROS topic
-`/ugv/detections/front/geojson` (`std_msgs/String`) regardless.
+- [Architecture, models and Unity boundary](docs/UAV_ARCHITECTURE.md)
+- [CLI commands and output schema](src/triffid_uav_perception/README.md)
+- [FSS-SAM3 experiment](docs/UAV_FSS_SAM3_TEST.md)
 
-The bridge subscribes to `/fix` (`NavSatFix`) and `/dog_odom`
-(`Odometry`) for geo-referencing. Until a GPS fix arrives, features are
-emitted in body-frame coordinates with `"local_frame": true`.
+## Evaluation and reproducibility
 
-### UGV topics
+- [Dataset preparation and split policy](docs/PUI_DATA_PREPARATION.md)
+- [Model assets and prepared runtimes](docs/MODEL_SETUP.md)
+- [Evaluation and production plan](docs/EVALUATION_AND_PRODUCTION.md)
+- [Interface specification](INTERFACE.md)
+- [What is included in Git and what remains external](docs/REPOSITORY_CONTENTS.md)
 
-| Direction | Topic | Type |
-|---|---|---|
-| in | *( RGB / depth / CameraInfo topics)* | `sensor_msgs/Image`, `CameraInfo` |
-| in | `/fix`, `/dog_odom`, `/tf`, `/tf_static` | `NavSatFix`, `Odometry`, TF |
-| out | `/ugv/detections/front/detections_3d` | `vision_msgs/Detection3DArray` |
-| out | `/ugv/detections/front/segmentation` | `sensor_msgs/Image` (mono8 label map) |
-| out | `/ugv/detections/front/debug_image` | `sensor_msgs/Image` (lazy) |
-| out | `/ugv/detections/front/geojson` | `std_msgs/String` (GeoJSON) |
+Code, tests, scripts, configuration and documentation belong in this repository.
+Datasets, supports, model weights, environments, generated videos/exports and
+SQLite mission state remain external. Some research runners and site configs
+record workstation-specific paths; adjust them before using another machine.
+The existing `best.pt` Git LFS pointer is historical and unchanged.
 
-**Alternatively, both nodes start together via the launch file:**
+On the prepared development environment, run the package regression suite with:
 
 ```bash
-ros2 launch triffid_ugv_perception ugv_perception.launch.py \
-    rgb_image_topic:=... depth_image_topic:=... camera_info_topic:=... \
-    save_to_disk:=true publish_to_api:=false
+PYTHONPATH=ugv_models/devit_runtime:src/triffid_uav_perception:src/triffid_ugv_perception \
+  /home/oracle/miniforge3/envs/fewshot-dev/bin/python -m pytest -q --import-mode=importlib \
+  src/triffid_ugv_perception/tests src/triffid_uav_perception/tests
 ```
-
----
-
-## 2. UAV Module
-
-Drone-video detection producing pixel-space GeoJSON, with
-persistent ByteTrack IDs, each detection reduced to a few independent
-pixel sample points (`Point`/`MultiPoint`), DJI SRT
-telemetry joined per frame so every feature also carries the camera pose
-(`drone_latitude/longitude/altitude_m`, `gimbal_yaw/pitch/roll`). A
-downstream consumer raycasts the pixel points against a 3DGS
-reconstruction to obtain real-world coordinates.
-
-### Build and start the container
-
-```bash
-docker compose -f docker-compose.uav.yml up -d
-```
-
-### Live mode - poll the API
-
-Polls for newly uploaded videos (`.mp4`/`.mov`) and their `.srt`
-telemetry files, processes each video, and writes one
-GeoJSON per video:
-
-```bash
-docker exec -e FUTURISED_MEDIA_API_KEY='your-key' triffid_uav_perception bash -c \
-  "PYTHONPATH=/app/src/triffid_uav_perception:/app/src \
-   python -m triffid_uav_perception.uav_node --poll-api \
-       --api-camera Wide --api-poll-interval 30 \
-       --api-download-dir /app/videos --output /app/samples"
-```
-
-Outputs land in `./uav_samples/<video-stem>_detections.geojson` on the
-host. Add `--post-telesto` to also upload each result to the TELESTO
-backend (off by default).
-
-### Local-file test mode
-
-To verify the module place the mp4 file under
-`./uav_videos/`, with its `.srt`, auto-detected by name):
-
-```bash
-docker exec triffid_uav_perception bash -c \
-  "PYTHONPATH=/app/src/triffid_uav_perception:/app/src \
-   python -m triffid_uav_perception.uav_node /app/videos/flight.mp4 \
-       --output /app/samples"
-```
-
-Key flags (defaults): `--model /app/best.pt`* , `--confidence 0.5`,
-`--stride 5` (every Nth frame), `--sample-seconds 1.0` (each track id
-emitted at most once per second), `--classes id,label,...` (allowlist),
-`--srt path` (override sidecar auto-detect), `--debug-video` (also save
-`<stem>_debug.mp4` with boxes/points/labels drawn on top, for
-`--debug-video-seconds 20` starting at `--debug-video-start 0` — useful
-for eyeballing whether detections look right).
-
-### UAV output schema
-
-One RFC-7946 FeatureCollection per video (`metadata` member: video/model/
-fps/stride/`srt_file`/counts). `geometry` is `Point` or `MultiPoint` in
-**pixel** coordinates (origin top-left) — independent raycast samples, not
-an outline. `drone_*`/`gimbal_*` properties (camera pose for that frame)
-appear only when an SRT sidecar was found. Full schema: [INTERFACE.md](INTERFACE.md).
 
 ## Repository layout
 
-```
-├── docker-compose.yml / Dockerfile           # UGV container (ROS 2 Humble + CUDA)
-├── docker-compose.uav.yml / Dockerfile.uav   # UAV container (Python + CUDA torch)
-├── best.pt                                   # shared YOLOv11-seg model (Git LFS)
-├── INTERFACE.md                              # topic/message/GeoJSON/class-list spec
-└── src/
-    ├── triffid_ugv_perception/               # ROS 2 package (ugv_node, geojson_bridge, tracker)
-    ├── triffid_uav_perception/               # UAV pipeline (uav_node, srt_metadata, api_client)
-    └── triffid_telesto/                      # TELESTO REST client (used by --post-telesto)
+```text
+configs/                         Site/model/suite configuration
+src/triffid_ugv_perception/       ROS 2 Jazzy application and tests
+src/triffid_uav_perception/       UAV Python application and tests
+src/triffid_telesto/              Existing REST helper package
+scripts/                         Preparation, evaluation and verification tools
+docs/                            Architecture, setup, protocols and result summaries
+Dockerfile, docker-compose*.yml   UGV build and deployment profiles
+Dockerfile.uav                    UAV SANSA runtime definition
 ```

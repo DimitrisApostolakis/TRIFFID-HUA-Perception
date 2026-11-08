@@ -14,14 +14,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-jazzy-image-transport \
     && rm -rf /var/lib/apt/lists/*
 
-# Python deps
-# Pin numpy<2 because ROS2 Jazzy cv_bridge was compiled against NumPy 1.x.
+# Frozen SANSA runtime. NumPy 1.x remains compatible with ROS cv_bridge.
 RUN pip3 install --no-cache-dir --break-system-packages \
-    "numpy<2" \
-    "packaging>=22" \
-    opencv-python-headless \
-    ultralytics \
-    scipy
+    torch==2.7.1 torchvision==0.22.1 \
+    --index-url https://download.pytorch.org/whl/cu126
+COPY src/triffid_ugv_perception/requirements*.txt /tmp/ugv-requirements/
+RUN pip3 install --no-cache-dir --break-system-packages \
+    -r /tmp/ugv-requirements/requirements-sansa.txt
 
 # Workspace setup 
 WORKDIR /ws

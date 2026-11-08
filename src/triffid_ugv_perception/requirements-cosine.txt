@@ -1,0 +1,13 @@
+# Install into ugv_models/cosine_runtime, on top of the existing fewshot-dev
+# Python 3.10 / PyTorch 1.13.1+cu117 / compiled Detectron2 runtime.
+# For mmcv-full use the cu117/torch1.13.0 wheel index (see COSINE_BASELINE.md).
+open_clip_torch==2.24.0
+huggingface_hub==0.25.2
+ftfy==6.3.1
+regex==2026.9.29
+safetensors==0.8.0
+sentencepiece==0.2.2
+mmcv-full==1.7.2
+addict==2.4.0
+yapf==0.43.0
+platformdirs==4.12.4
